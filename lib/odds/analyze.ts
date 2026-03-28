@@ -1,6 +1,8 @@
 import { SportsbookLine, americanToImpliedProbability } from "./normalize";
 
-export type BestLineAnalysis = {
+// ── Types ──────────────────────────────────────────────────────────────────
+
+export type Pick = {
   gameId: string;
   homeTeam: string;
   awayTeam: string;
@@ -9,78 +11,82 @@ export type BestLineAnalysis = {
   marketKey: string;
   side: string;
   point: number | null;
-  lines: {
-    book: string;
-    bookmakerKey: string;
-    price: number;
-    impliedProb: number;
-    link: string | null;
-    updatedAt: string | null;
-  }[];
-  best: {
-    book: string;
-    bookmakerKey: string;
-    price: number;
-    impliedProb: number;
-    link: string | null;
-  };
-  worst: {
-    book: string;
-    price: number;
-    impliedProb: number;
-  };
-  edge: number; // percentage points of implied probability saved vs worst line
-  noVigProb: number | null; // fair probability after removing vig
-  vigAtBest: number | null; // vig baked into the best line (lower = better)
-  rating: "strong" | "moderate" | "neutral";
-  reasons: string[];
+  recommendation: "take" | "lean" | "pass";
+  confidence: number; // 0-100
+  bestBook: string;
+  bestBookKey: string;
+  bestPrice: number;
+  bestLink: string | null;
+  otherBook: string | null;
+  otherPrice: number | null;
+  fairProb: number | null; // no-vig probability (the "true" chance)
+  impliedProb: number; // what the best line implies
+  expectedValue: number; // EV per $100 wagered
+  kellySuggestion: number; // Kelly fraction (0-1)
+  edge: number; // % edge over fair value
+  priceDiff: number; // cents between books
+  vig: number | null;
+  headline: string; // "Take Lakers ML at DraftKings +150"
+  reasoning: string[]; // stat-backed bullets
 };
 
-export type GameAnalysis = {
+export type GamePicks = {
   gameId: string;
   homeTeam: string;
   awayTeam: string;
   commenceTime: string;
   sport: string;
-  markets: BestLineAnalysis[];
-  totalVigDK: number | null;
-  totalVigFD: number | null;
+  picks: Pick[];
+  hasTake: boolean;
+  bestPick: Pick | null;
 };
 
-/**
- * For a given game + market (e.g. moneyline), compute the no-vig probability
- * by summing implied probs of all outcomes for a book, then dividing each
- * outcome's implied prob by that sum.
- */
-function computeNoVig(
-  lines: SportsbookLine[],
-  gameId: string,
-  marketKey: string,
-  bookmakerKey: string,
-  side: string
-): number | null {
-  const bookLines = lines.filter(
-    (l) =>
-      l.gameId === gameId &&
-      l.marketKey === marketKey &&
-      l.bookmakerKey === bookmakerKey
-  );
-  if (bookLines.length < 2) return null;
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-  const totalImplied = bookLines.reduce(
-    (sum, l) => sum + americanToImpliedProbability(l.price),
-    0
-  );
-  const thisLine = bookLines.find((l) => l.outcomeName === side);
-  if (!thisLine) return null;
-
-  return americanToImpliedProbability(thisLine.price) / totalImplied;
+function formatOdds(price: number) {
+  return price > 0 ? `+${price}` : `${price}`;
 }
 
-/**
- * Compute the total vig (overround) for a book on a specific game+market.
- * Vig = sum of implied probs - 1. E.g. 0.04 = 4% vig.
- */
+function americanToDecimal(odds: number) {
+  if (odds > 0) return odds / 100 + 1;
+  return 100 / Math.abs(odds) + 1;
+}
+
+function computeNoVigBothSides(
+  lines: SportsbookLine[],
+  gameId: string,
+  marketKey: string
+): Map<string, number> {
+  // Average the no-vig across all books for each side
+  const bookKeys = [...new Set(lines.filter(l => l.gameId === gameId && l.marketKey === marketKey).map(l => l.bookmakerKey))];
+  const sideProbs = new Map<string, number[]>();
+
+  for (const bookKey of bookKeys) {
+    const bookLines = lines.filter(
+      (l) => l.gameId === gameId && l.marketKey === marketKey && l.bookmakerKey === bookKey
+    );
+    if (bookLines.length < 2) continue;
+
+    const totalImplied = bookLines.reduce(
+      (sum, l) => sum + americanToImpliedProbability(l.price), 0
+    );
+
+    for (const bl of bookLines) {
+      const sideKey = `${bl.outcomeName}||${bl.point ?? "null"}`;
+      const noVig = americanToImpliedProbability(bl.price) / totalImplied;
+      if (!sideProbs.has(sideKey)) sideProbs.set(sideKey, []);
+      sideProbs.get(sideKey)!.push(noVig);
+    }
+  }
+
+  // Average across books = consensus fair probability
+  const result = new Map<string, number>();
+  for (const [sideKey, probs] of sideProbs) {
+    result.set(sideKey, probs.reduce((a, b) => a + b, 0) / probs.length);
+  }
+  return result;
+}
+
 function computeVig(
   lines: SportsbookLine[],
   gameId: string,
@@ -88,29 +94,20 @@ function computeVig(
   bookmakerKey: string
 ): number | null {
   const bookLines = lines.filter(
-    (l) =>
-      l.gameId === gameId &&
-      l.marketKey === marketKey &&
-      l.bookmakerKey === bookmakerKey
+    (l) => l.gameId === gameId && l.marketKey === marketKey && l.bookmakerKey === bookmakerKey
   );
   if (bookLines.length < 2) return null;
-
   const totalImplied = bookLines.reduce(
-    (sum, l) => sum + americanToImpliedProbability(l.price),
-    0
+    (sum, l) => sum + americanToImpliedProbability(l.price), 0
   );
   return totalImplied - 1;
 }
 
-/**
- * Core analysis: for every game × market × side, find the best line across books
- * and produce analytics explaining why it's better.
- */
-export function analyzeBestLines(lines: SportsbookLine[]): GameAnalysis[] {
-  // Group by game
-  const gameIds = [...new Set(lines.map((l) => l.gameId))];
+// ── Core Analysis ──────────────────────────────────────────────────────────
 
-  const games: GameAnalysis[] = [];
+export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
+  const gameIds = [...new Set(lines.map((l) => l.gameId))];
+  const allGames: GamePicks[] = [];
 
   for (const gameId of gameIds) {
     const gameLines = lines.filter((l) => l.gameId === gameId);
@@ -118,19 +115,17 @@ export function analyzeBestLines(lines: SportsbookLine[]): GameAnalysis[] {
 
     const first = gameLines[0];
     const marketKeys = [...new Set(gameLines.map((l) => l.marketKey))];
-    const markets: BestLineAnalysis[] = [];
-
-    // Compute total vig per book for the moneyline market
-    const totalVigDK = computeVig(gameLines, gameId, "h2h", "draftkings");
-    const totalVigFD = computeVig(gameLines, gameId, "h2h", "fanduel");
+    const picks: Pick[] = [];
 
     for (const marketKey of marketKeys) {
       const marketLines = gameLines.filter((l) => l.marketKey === marketKey);
-      // Group by side+point to handle spreads/totals correctly
+
+      // Get consensus fair probabilities across both books
+      const fairProbs = computeNoVigBothSides(lines, gameId, marketKey);
+
+      // Group by side
       const sideKeys = [
-        ...new Set(
-          marketLines.map((l) => `${l.outcomeName}||${l.point ?? "null"}`)
-        ),
+        ...new Set(marketLines.map((l) => `${l.outcomeName}||${l.point ?? "null"}`)),
       ];
 
       for (const sideKey of sideKeys) {
@@ -138,102 +133,140 @@ export function analyzeBestLines(lines: SportsbookLine[]): GameAnalysis[] {
         const point = pointStr === "null" ? null : parseFloat(pointStr);
 
         const sidelines = marketLines.filter(
-          (l) =>
-            l.outcomeName === side &&
-            ((l.point === null && point === null) || l.point === point)
+          (l) => l.outcomeName === side && ((l.point === null && point === null) || l.point === point)
         );
-
         if (sidelines.length === 0) continue;
 
-        const analyzed = sidelines.map((l) => ({
-          book: l.book,
-          bookmakerKey: l.bookmakerKey,
-          price: l.price,
-          impliedProb: americanToImpliedProbability(l.price),
-          link: l.link,
-          updatedAt: l.updatedAt,
-        }));
+        // Sort by best price (highest American odds)
+        const sorted = [...sidelines].sort((a, b) => b.price - a.price);
+        const best = sorted[0];
+        const other = sorted.length > 1 ? sorted[1] : null;
 
-        // Best line = highest American odds (most positive or least negative)
-        // which corresponds to lowest implied probability (best payout for bettor)
-        analyzed.sort((a, b) => b.price - a.price);
+        const impliedProb = americanToImpliedProbability(best.price);
+        const fairProb = fairProbs.get(sideKey) ?? null;
+        const decimalOdds = americanToDecimal(best.price);
 
-        const best = analyzed[0];
-        const worst = analyzed[analyzed.length - 1];
+        // Edge = how much the fair probability exceeds the implied probability
+        // Positive edge = the true chance of winning is higher than what the line implies
+        const edge = fairProb !== null ? (fairProb - impliedProb) * 100 : 0;
 
-        const edge =
-          analyzed.length > 1
-            ? (worst.impliedProb - best.impliedProb) * 100
-            : 0;
+        // Expected Value per $100 bet
+        // EV = (fairProb × payout) - (1-fairProb) × stake
+        const ev = fairProb !== null
+          ? (fairProb * (decimalOdds - 1) - (1 - fairProb)) * 100
+          : 0;
 
-        // No-vig fair probability from the best book
-        const noVigProb = computeNoVig(
-          lines,
-          gameId,
-          marketKey,
-          best.bookmakerKey,
-          side
-        );
+        // Kelly Criterion: f* = (bp - q) / b
+        // b = decimal odds - 1, p = fair prob, q = 1 - p
+        let kelly = 0;
+        if (fairProb !== null && fairProb > 0 && fairProb < 1) {
+          const b = decimalOdds - 1;
+          const p = fairProb;
+          const q = 1 - p;
+          kelly = Math.max(0, (b * p - q) / b);
+        }
 
-        // Vig at the best book for this market
-        const vigAtBest = computeVig(lines, gameId, marketKey, best.bookmakerKey);
+        const priceDiff = other ? best.price - other.price : 0;
+        const vig = computeVig(lines, gameId, marketKey, best.bookmakerKey);
 
-        // Build reasons
-        const reasons: string[] = [];
-        let rating: "strong" | "moderate" | "neutral" = "neutral";
+        // ── Determine recommendation ──
+        let recommendation: "take" | "lean" | "pass" = "pass";
+        let confidence = 0;
 
-        if (analyzed.length > 1 && best.price !== worst.price) {
-          reasons.push(
-            `Best price at ${best.book} (${formatOdds(best.price)}) vs ${worst.book} (${formatOdds(worst.price)})`
+        // Strong take: positive EV with meaningful edge
+        if (ev > 2 && edge > 1.5) {
+          recommendation = "take";
+          confidence = Math.min(95, 50 + edge * 8 + ev * 2);
+        } else if (ev > 0.5 || edge > 1) {
+          recommendation = "lean";
+          confidence = Math.min(75, 35 + edge * 6 + ev * 3);
+        } else if (Math.abs(priceDiff) >= 10 && edge > 0) {
+          recommendation = "lean";
+          confidence = Math.min(65, 30 + Math.abs(priceDiff) * 0.5);
+        } else {
+          recommendation = "pass";
+          confidence = Math.max(10, 25 - Math.abs(ev) * 2);
+        }
+
+        confidence = Math.round(Math.max(0, Math.min(100, confidence)));
+
+        // ── Build headline ──
+        const marketLabel = marketKey === "h2h" ? "ML" : marketKey === "spreads" ? `${point != null && point > 0 ? "+" : ""}${point}` : marketKey === "totals" ? `${side} ${point}` : marketKey;
+        const headline =
+          recommendation === "take"
+            ? `Take ${side} ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
+            : recommendation === "lean"
+            ? `Lean ${side} ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
+            : `Pass on ${side} ${marketLabel}`;
+
+        // ── Build reasoning ──
+        const reasoning: string[] = [];
+
+        if (fairProb !== null) {
+          reasoning.push(
+            `Market consensus gives ${side} a ${(fairProb * 100).toFixed(1)}% true probability`
+          );
+          reasoning.push(
+            `${best.book} is pricing it at ${(impliedProb * 100).toFixed(1)}% implied — ${
+              edge > 0
+                ? `${edge.toFixed(1)}% underpriced (value)`
+                : `${Math.abs(edge).toFixed(1)}% overpriced`
+            }`
           );
         }
 
-        if (edge >= 3) {
-          reasons.push(
-            `${edge.toFixed(1)}% implied probability edge — significant value`
+        if (ev > 0) {
+          reasoning.push(
+            `+$${ev.toFixed(2)} expected value per $100 wagered`
           );
-          rating = "strong";
-        } else if (edge >= 1) {
-          reasons.push(
-            `${edge.toFixed(1)}% implied probability edge`
+        } else if (ev < -2) {
+          reasoning.push(
+            `Negative EV: -$${Math.abs(ev).toFixed(2)} per $100 — the juice is eating your edge`
           );
-          rating = "moderate";
         }
 
-        if (noVigProb !== null) {
-          const vigOverpay = best.impliedProb - noVigProb;
-          if (vigOverpay > 0) {
-            reasons.push(
-              `Fair prob ${(noVigProb * 100).toFixed(1)}% → you're paying ${(vigOverpay * 100).toFixed(1)}% vig at ${best.book}`
-            );
-          }
+        if (other && priceDiff !== 0) {
+          reasoning.push(
+            `${Math.abs(priceDiff)} cents better than ${other.book} (${formatOdds(other.price)}) — this is the sharper number`
+          );
         }
 
-        if (vigAtBest !== null) {
-          const vigPct = vigAtBest * 100;
+        if (kelly > 0.02) {
+          reasoning.push(
+            `Kelly suggests ${(kelly * 100).toFixed(1)}% of bankroll — ${
+              kelly > 0.05
+                ? "strong sizing signal"
+                : "small but positive edge"
+            }`
+          );
+        }
+
+        if (vig !== null) {
+          const vigPct = vig * 100;
           if (vigPct < 3) {
-            reasons.push(`Low juice: ${vigPct.toFixed(1)}% total vig on this market`);
-            if (rating === "neutral") rating = "moderate";
+            reasoning.push(`Low juice market (${vigPct.toFixed(1)}% vig) — more of your bet goes to potential payout`);
           } else if (vigPct >= 5) {
-            reasons.push(`High juice: ${vigPct.toFixed(1)}% total vig — consider waiting for better price`);
+            reasoning.push(`Heavy juice (${vigPct.toFixed(1)}% vig) — the book is taking a big cut here`);
           }
         }
 
-        if (analyzed.length > 1) {
-          const priceDiff = best.price - worst.price;
-          if (Math.abs(priceDiff) >= 15) {
-            reasons.push(
-              `${Math.abs(priceDiff)} cent spread between books — shop this line`
-            );
-            if (rating === "neutral") rating = "moderate";
+        if (recommendation === "take" && fairProb !== null) {
+          const breakeven = impliedProb * 100;
+          reasoning.push(
+            `You only need ${side} to win ${breakeven.toFixed(1)}% of the time to break even — consensus says they win ${(fairProb * 100).toFixed(1)}%`
+          );
+        }
+
+        if (recommendation === "pass") {
+          if (ev < 0) {
+            reasoning.push("No edge detected — the line is priced efficiently or against you");
+          }
+          if (other && priceDiff === 0) {
+            reasoning.push("Both books agree on this number — no line shopping advantage");
           }
         }
 
-        if (reasons.length === 0) {
-          reasons.push("Lines are identical across books");
-        }
-
-        markets.push({
+        picks.push({
           gameId,
           homeTeam: first.homeTeam,
           awayTeam: first.awayTeam,
@@ -242,65 +275,76 @@ export function analyzeBestLines(lines: SportsbookLine[]): GameAnalysis[] {
           marketKey,
           side,
           point,
-          lines: analyzed,
-          best: {
-            book: best.book,
-            bookmakerKey: best.bookmakerKey,
-            price: best.price,
-            impliedProb: best.impliedProb,
-            link: best.link,
-          },
-          worst: {
-            book: worst.book,
-            price: worst.price,
-            impliedProb: worst.impliedProb,
-          },
-          edge,
-          noVigProb,
-          vigAtBest,
-          rating,
-          reasons,
+          recommendation,
+          confidence,
+          bestBook: best.book,
+          bestBookKey: best.bookmakerKey,
+          bestPrice: best.price,
+          bestLink: best.link,
+          otherBook: other?.book ?? null,
+          otherPrice: other?.price ?? null,
+          fairProb,
+          impliedProb,
+          expectedValue: Math.round(ev * 100) / 100,
+          kellySuggestion: Math.round(kelly * 1000) / 1000,
+          edge: Math.round(edge * 100) / 100,
+          priceDiff,
+          vig,
+          headline,
+          reasoning,
         });
       }
     }
 
-    // Sort markets: strong first, then moderate, then neutral
-    const ratingOrder = { strong: 0, moderate: 1, neutral: 2 };
-    markets.sort((a, b) => ratingOrder[a.rating] - ratingOrder[b.rating]);
+    // Sort: takes first, then leans, then passes. Within each tier, by confidence desc.
+    const recOrder = { take: 0, lean: 1, pass: 2 };
+    picks.sort((a, b) => {
+      const o = recOrder[a.recommendation] - recOrder[b.recommendation];
+      if (o !== 0) return o;
+      return b.confidence - a.confidence;
+    });
 
-    games.push({
+    const hasTake = picks.some((p) => p.recommendation === "take");
+    const bestPick = picks.length > 0 ? picks[0] : null;
+
+    allGames.push({
       gameId,
       homeTeam: first.homeTeam,
       awayTeam: first.awayTeam,
       commenceTime: first.commenceTime,
       sport: first.sport,
-      markets,
-      totalVigDK,
-      totalVigFD,
+      picks,
+      hasTake,
+      bestPick,
     });
   }
 
-  // Sort games by commence time
-  games.sort(
-    (a, b) =>
-      new Date(a.commenceTime).getTime() - new Date(b.commenceTime).getTime()
-  );
+  // Sort games: games with "take" picks first, then by start time
+  allGames.sort((a, b) => {
+    if (a.hasTake && !b.hasTake) return -1;
+    if (!a.hasTake && b.hasTake) return 1;
+    return new Date(a.commenceTime).getTime() - new Date(b.commenceTime).getTime();
+  });
 
-  return games;
+  return allGames;
 }
 
-function formatOdds(price: number) {
-  return price > 0 ? `+${price}` : `${price}`;
-}
-
-export function overallEdgeSummary(games: GameAnalysis[]) {
-  const allMarkets = games.flatMap((g) => g.markets);
-  const strongPicks = allMarkets.filter((m) => m.rating === "strong");
-  const moderatePicks = allMarkets.filter((m) => m.rating === "moderate");
-  const avgEdge =
-    allMarkets.length > 0
-      ? allMarkets.reduce((sum, m) => sum + m.edge, 0) / allMarkets.length
+export function picksSummary(games: GamePicks[]) {
+  const allPicks = games.flatMap((g) => g.picks);
+  const takes = allPicks.filter((p) => p.recommendation === "take");
+  const leans = allPicks.filter((p) => p.recommendation === "lean");
+  const totalEV = takes.reduce((sum, p) => sum + p.expectedValue, 0);
+  const avgConfidence =
+    takes.length > 0
+      ? takes.reduce((sum, p) => sum + p.confidence, 0) / takes.length
       : 0;
 
-  return { strongPicks, moderatePicks, avgEdge, totalMarkets: allMarkets.length };
+  return {
+    takes,
+    leans,
+    totalGames: games.length,
+    totalMarkets: allPicks.length,
+    totalEV: Math.round(totalEV * 100) / 100,
+    avgConfidence: Math.round(avgConfidence),
+  };
 }
