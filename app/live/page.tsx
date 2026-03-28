@@ -98,6 +98,9 @@ function FactorRow({ factor }: { factor: Factor }) {
       <div>
         <span className="font-medium text-slate-300">{factor.name}: </span>
         <span className="text-slate-400">{factor.detail}</span>
+        {factor.citation && (
+          <span className="ml-1 text-[10px] italic text-slate-600">[{factor.citation}]</span>
+        )}
       </div>
     </div>
   );
@@ -220,16 +223,66 @@ function GameCard({ game }: { game: GameProjection }) {
             <ProbBar value={game.awayWinProb} label={game.awayTeam} />
             <ProbBar value={game.homeWinProb} label={game.homeTeam} />
           </div>
-          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
+
+          {/* Expected scoring & spread/total */}
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-500">
             {game.spreadHome !== null && (
               <span>Spread: {game.homeTeam} {game.spreadHome > 0 ? "+" : ""}{game.spreadHome}</span>
             )}
             {game.projectedTotal !== null && (
               <span>O/U: {game.projectedTotal}</span>
             )}
+            {game.homeExpectedPts !== null && game.awayExpectedPts !== null && (
+              <span>Expected: {game.awayTeam} {game.awayExpectedPts} &ndash; {game.homeTeam} {game.homeExpectedPts}</span>
+            )}
+            {game.marginOfVictory !== null && game.marginOfVictory > 0 && (
+              <span>MOV: {game.marginOfVictory}</span>
+            )}
           </div>
-          {game.gameFactor && (
-            <div className="mt-2 text-xs text-slate-500">{game.gameFactor}</div>
+
+          {/* Model breakdown */}
+          {(game.consensusHomeProb !== null || game.pythagHomeProb !== null) && (
+            <div className="mt-3 flex flex-wrap gap-3">
+              {game.consensusHomeProb !== null && (
+                <div className="rounded-lg bg-white/5 px-3 py-1.5 text-center">
+                  <div className="text-[10px] text-slate-500">Consensus</div>
+                  <div className="text-sm font-semibold text-blue-400">
+                    {Math.round(game.consensusHomeProb * 100)}%
+                  </div>
+                </div>
+              )}
+              {game.pythagHomeProb !== null && (
+                <div className="rounded-lg bg-white/5 px-3 py-1.5 text-center">
+                  <div className="text-[10px] text-slate-500">Pythagorean</div>
+                  <div className="text-sm font-semibold text-amber-400">
+                    {Math.round(game.pythagHomeProb * 100)}%
+                  </div>
+                </div>
+              )}
+              {game.spreadHome !== null && (
+                <div className="rounded-lg bg-white/5 px-3 py-1.5 text-center">
+                  <div className="text-[10px] text-slate-500">Spread-implied</div>
+                  <div className="text-sm font-semibold text-emerald-400">
+                    {Math.round(game.homeWinProb * 100)}%
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center text-[10px] text-slate-600 italic">
+                {game.homeTeam} win %
+              </div>
+            </div>
+          )}
+
+          {/* Model notes */}
+          {game.modelNotes.length > 0 && (
+            <details className="mt-3 text-xs text-slate-500">
+              <summary className="cursor-pointer hover:text-slate-400">Model details</summary>
+              <ul className="mt-1.5 space-y-1 pl-3 text-[11px]">
+                {game.modelNotes.map((note, i) => (
+                  <li key={i} className="text-slate-600">{note}</li>
+                ))}
+              </ul>
+            </details>
           )}
         </div>
       )}
