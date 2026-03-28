@@ -8,15 +8,15 @@ export default function Home() {
           Odds Compare
         </h1>
         <p className="mt-4 text-lg leading-relaxed text-slate-400">
-          We scan DraftKings and FanDuel every 30 minutes, find mispriced lines,
-          and tell you exactly what we&apos;d take &mdash; backed by expected
-          value, fair probability, and Kelly Criterion math.
+          Weighted game projections built from 19+ sportsbooks. We strip the
+          vig, average the consensus, and show you the real probabilities &mdash;
+          for NBA and MLB.
         </p>
         <Link
           href="/live"
           className="mt-8 inline-block rounded-xl bg-blue-600 px-8 py-3 text-lg font-semibold text-white transition hover:bg-blue-500"
         >
-          See Today&apos;s Plays
+          View Projections
         </Link>
       </div>
     </main>

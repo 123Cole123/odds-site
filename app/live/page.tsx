@@ -4,36 +4,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   RefreshCw,
   ExternalLink,
-  TrendingUp,
-  Zap,
-  BarChart3,
   ChevronDown,
   ChevronUp,
   Target,
   AlertCircle,
-  DollarSign,
-  Percent,
-  ThumbsUp,
-  ThumbsDown,
-  Minus,
   Home,
   Plane,
-  Scale,
   Info,
+  Users,
 } from "lucide-react";
 import { DISPLAY_SPORTS } from "@/lib/odds/sports";
 import {
-  SportsbookLine,
   KalshiLine,
   formatAmericanOdds,
   centsToPercentDisplay,
+  SportsbookLine,
 } from "@/lib/odds/normalize";
 import {
-  generatePicks,
-  picksSummary,
-  GamePicks,
-  Pick,
-  Insight,
+  buildProjections,
+  projectionsSummary,
+  GameProjection,
+  Projection,
+  Factor,
 } from "@/lib/odds/analyze";
 
 type ApiResponse = {
@@ -51,11 +43,6 @@ const REFRESH_INTERVAL = 30 * 60 * 1000;
 const SPORT_COLORS: Record<string, string> = {
   NBA: "bg-orange-500/20 text-orange-400 ring-orange-500/30",
   MLB: "bg-red-500/20 text-red-400 ring-red-500/30",
-  NHL: "bg-cyan-500/20 text-cyan-400 ring-cyan-500/30",
-  NFL: "bg-green-500/20 text-green-400 ring-green-500/30",
-  NCAAB: "bg-purple-500/20 text-purple-400 ring-purple-500/30",
-  EPL: "bg-violet-500/20 text-violet-400 ring-violet-500/30",
-  UCL: "bg-blue-500/20 text-blue-400 ring-blue-500/30",
 };
 
 function SportBadge({ label }: { label: string }) {
@@ -67,193 +54,132 @@ function SportBadge({ label }: { label: string }) {
   );
 }
 
-function ConfidenceMeter({ value }: { value: number }) {
-  const color = value >= 70 ? "bg-emerald-500" : value >= 45 ? "bg-amber-500" : "bg-slate-500";
+function ProbBar({ value, label }: { value: number; label: string }) {
+  const pct = Math.round(value * 100);
+  const color =
+    pct >= 65 ? "bg-emerald-500" : pct >= 50 ? "bg-blue-500" : pct >= 35 ? "bg-amber-500" : "bg-slate-500";
   return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${value}%` }} />
+    <div className="flex-1">
+      <div className="mb-1 flex items-baseline justify-between">
+        <span className="text-xs text-slate-400">{label}</span>
+        <span className={`text-lg font-bold tabular-nums ${pct >= 50 ? "text-white" : "text-slate-400"}`}>
+          {pct}%
+        </span>
       </div>
-      <span className="text-xs tabular-nums text-slate-400">{value}%</span>
+      <div className="h-2 overflow-hidden rounded-full bg-white/10">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }
 
-function RecBadge({ rec }: { rec: "take" | "lean" | "pass" }) {
-  if (rec === "take")
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-bold text-emerald-400 ring-1 ring-emerald-500/40">
-        <ThumbsUp className="h-3.5 w-3.5" /> TAKE IT
-      </span>
-    );
-  if (rec === "lean")
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-3 py-1 text-sm font-bold text-amber-400 ring-1 ring-amber-500/40">
-        <TrendingUp className="h-3.5 w-3.5" /> LEAN
-      </span>
-    );
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-500/20 px-3 py-1 text-sm font-medium text-slate-400 ring-1 ring-slate-500/30">
-      <Minus className="h-3.5 w-3.5" /> PASS
-    </span>
-  );
+function ConfBadge({ level }: { level: "high" | "medium" | "low" }) {
+  if (level === "high")
+    return <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/30">High confidence</span>;
+  if (level === "medium")
+    return <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-400 ring-1 ring-blue-500/30">Medium confidence</span>;
+  return <span className="rounded-full bg-slate-500/20 px-2 py-0.5 text-[10px] font-semibold text-slate-400 ring-1 ring-slate-500/30">Low confidence</span>;
 }
 
-function InsightBadge({ insight }: { insight: Insight }) {
+function FactorRow({ factor }: { factor: Factor }) {
   const icon =
-    insight.label === "Home advantage" ? <Home className="h-3 w-3" /> :
-    insight.label === "Road team" ? <Plane className="h-3 w-3" /> :
-    insight.label === "Toss-up game" ? <Scale className="h-3 w-3" /> :
+    factor.name.includes("Home") ? <Home className="h-3 w-3" /> :
+    factor.name.includes("Road") ? <Plane className="h-3 w-3" /> :
+    factor.name.includes("consensus") ? <Users className="h-3 w-3" /> :
     <Info className="h-3 w-3" />;
 
-  const colors =
-    insight.type === "bullish"
-      ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
-      : insight.type === "bearish"
-      ? "border-red-500/20 bg-red-500/5 text-red-400"
-      : "border-slate-500/20 bg-slate-500/5 text-slate-400";
+  const dot =
+    factor.impact === "supports" ? "bg-emerald-500" :
+    factor.impact === "against" ? "bg-red-500" : "bg-slate-500";
 
   return (
-    <div className={`rounded-lg border p-2.5 ${colors}`}>
-      <div className="flex items-center gap-1.5 text-xs font-semibold">
-        {icon} {insight.label}
+    <div className="flex items-start gap-2 text-sm">
+      <span className={`mt-1.5 block h-2 w-2 flex-shrink-0 rounded-full ${dot}`} />
+      <div>
+        <span className="font-medium text-slate-300">{factor.name}: </span>
+        <span className="text-slate-400">{factor.detail}</span>
       </div>
-      <p className="mt-1 text-xs leading-relaxed opacity-80">{insight.detail}</p>
     </div>
   );
 }
 
-function PickCard({ pick }: { pick: Pick }) {
-  const [expanded, setExpanded] = useState(pick.recommendation === "take");
+function ProjectionCard({ proj }: { proj: Projection }) {
+  const [expanded, setExpanded] = useState(false);
+  const pct = Math.round(proj.probability * 100);
 
   return (
-    <div
-      className={`rounded-xl border transition-colors ${
-        pick.recommendation === "take"
-          ? "border-emerald-500/30 bg-emerald-500/[0.06]"
-          : pick.recommendation === "lean"
-          ? "border-amber-500/20 bg-amber-500/[0.04]"
-          : "border-white/10 bg-white/[0.02]"
-      }`}
-    >
+    <div className="rounded-xl border border-white/10 bg-white/[0.02]">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center justify-between p-4 text-left"
+        className="flex w-full items-center justify-between p-3 text-left"
       >
-        <div className="flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <RecBadge rec={pick.recommendation} />
-            {pick.isProp && (
-              <span className="rounded-md bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-400 ring-1 ring-purple-500/30">
-                PROP
-              </span>
-            )}
-            <span className="text-base font-semibold text-white">{pick.headline}</span>
-          </div>
-          <div className="mt-1.5 flex items-center gap-3">
-            <ConfidenceMeter value={pick.confidence} />
-            {pick.booksWithLine > 1 && (
-              <span className="text-[10px] text-slate-500">
-                {pick.booksWithLine} books
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="ml-4 flex items-center gap-3">
-          {pick.recommendation !== "pass" && pick.bestLink && (
-            <a
-              href={pick.bestLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500"
-            >
-              Bet at {pick.bestBook} <ExternalLink className="h-3 w-3" />
-            </a>
+        <div className="flex items-center gap-3 flex-1">
+          {proj.isProp && (
+            <span className="rounded-md bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-400 ring-1 ring-purple-500/30">
+              PROP
+            </span>
           )}
-          {expanded ? <ChevronUp className="h-5 w-5 text-slate-500" /> : <ChevronDown className="h-5 w-5 text-slate-500" />}
+          <span className="text-sm font-medium text-white">{proj.label}</span>
+          <ConfBadge level={proj.confidenceLevel} />
+          <span className="text-[10px] text-slate-500">{proj.booksUsed} books</span>
+        </div>
+        <div className="ml-3 flex items-center gap-3">
+          <div className="text-right">
+            <div className={`text-lg font-bold tabular-nums ${pct >= 55 ? "text-emerald-400" : pct >= 45 ? "text-white" : "text-slate-400"}`}>
+              {pct}%
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
         </div>
       </button>
 
       {expanded && (
-        <div className="border-t border-white/5 px-4 pb-4 pt-3">
-          {/* Stats */}
-          <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg bg-white/5 p-3 text-center">
-              <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-                <DollarSign className="h-3 w-3" /> EV / $100
-              </div>
-              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.expectedValue > 0 ? "text-emerald-400" : pick.expectedValue < -1 ? "text-red-400" : "text-slate-300"}`}>
-                {pick.expectedValue > 0 ? "+" : ""}${pick.expectedValue.toFixed(2)}
-              </div>
+        <div className="border-t border-white/5 px-3 pb-3 pt-2">
+          {/* Probability bar */}
+          <div className="mb-3">
+            <div className="h-3 overflow-hidden rounded-full bg-white/10">
+              <div
+                className={`h-full rounded-full transition-all ${pct >= 55 ? "bg-emerald-500" : pct >= 45 ? "bg-blue-500" : "bg-slate-500"}`}
+                style={{ width: `${pct}%` }}
+              />
             </div>
-            <div className="rounded-lg bg-white/5 p-3 text-center">
-              <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-                <Percent className="h-3 w-3" /> Edge
-              </div>
-              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.edge > 1.5 ? "text-emerald-400" : pick.edge > 0 ? "text-amber-400" : "text-slate-300"}`}>
-                {pick.edge > 0 ? "+" : ""}{pick.edge.toFixed(1)}%
-              </div>
-            </div>
-            <div className="rounded-lg bg-white/5 p-3 text-center">
-              <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-                <Target className="h-3 w-3" /> Fair Prob
-              </div>
-              <div className="mt-1 text-lg font-bold tabular-nums text-white">
-                {pick.fairProb !== null ? `${(pick.fairProb * 100).toFixed(1)}%` : "\u2014"}
-              </div>
-            </div>
-            <div className="rounded-lg bg-white/5 p-3 text-center">
-              <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-                <BarChart3 className="h-3 w-3" /> Kelly
-              </div>
-              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.kellySuggestion > 0.02 ? "text-emerald-400" : "text-slate-400"}`}>
-                {pick.kellySuggestion > 0 ? `${(pick.kellySuggestion * 100).toFixed(1)}%` : "\u2014"}
-              </div>
+            <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+              <span>0%</span>
+              <span>{pct}% projected</span>
+              <span>100%</span>
             </div>
           </div>
 
-          {/* Recommended line */}
-          <div className="mb-4 rounded-lg bg-white/5 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-slate-400">Best available line</div>
-                <div className="mt-1 text-2xl font-bold text-emerald-400">{formatAmericanOdds(pick.bestPrice)}</div>
-                <div className="mt-0.5 text-xs text-slate-500">at {pick.bestBook}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-slate-400">Fair value derived from</div>
-                <div className="mt-1 text-xs leading-relaxed text-slate-500">
-                  No-vig consensus probability<br />
-                  (overround stripped from both sides)
-                </div>
-              </div>
+          {/* Best available line */}
+          <div className="mb-3 flex items-center justify-between rounded-lg bg-white/5 px-3 py-2">
+            <div>
+              <div className="text-[10px] uppercase text-slate-500">Best available line</div>
+              <div className="text-base font-bold text-white">{formatAmericanOdds(proj.bestPrice)}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-slate-500">at {proj.bestBook}</div>
+              {proj.bestLink && (
+                <a
+                  href={proj.bestLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                >
+                  Open <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
             </div>
           </div>
 
-          {/* Insights */}
-          {pick.insights.length > 0 && (
-            <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {pick.insights.map((ins, i) => (
-                <InsightBadge key={i} insight={ins} />
-              ))}
+          {/* Factors */}
+          <div className="space-y-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              What goes into this projection
             </div>
-          )}
-
-          {/* Reasoning */}
-          <div className="rounded-lg bg-slate-900/60 p-3">
-            <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-300">
-              <Zap className="h-3.5 w-3.5" />
-              Why {pick.recommendation === "take" ? "we'd take this" : pick.recommendation === "lean" ? "we're leaning this way" : "we're passing"}
-            </div>
-            <ul className="space-y-1.5">
-              {pick.reasoning.map((reason, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm text-slate-400">
-                  <span className={`mt-1.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full ${pick.recommendation === "take" ? "bg-emerald-500" : pick.recommendation === "lean" ? "bg-amber-500" : "bg-slate-500"}`} />
-                  {reason}
-                </li>
-              ))}
-            </ul>
+            {proj.factors.map((f, i) => (
+              <FactorRow key={i} factor={f} />
+            ))}
           </div>
         </div>
       )}
@@ -261,74 +187,74 @@ function PickCard({ pick }: { pick: Pick }) {
   );
 }
 
-function GameSection({ game }: { game: GamePicks }) {
-  const takes = game.picks.filter((p) => p.recommendation === "take");
-  const leans = game.picks.filter((p) => p.recommendation === "lean");
-  const [showPasses, setShowPasses] = useState(false);
+function GameCard({ game }: { game: GameProjection }) {
+  const [showProps, setShowProps] = useState(false);
 
-  const activePicks = game.picks.filter((p) => p.recommendation !== "pass");
-  const passes = game.picks.filter((p) => p.recommendation === "pass");
+  const gameLines = game.projections.filter((p) => !p.isProp);
+  const propLines = game.projections.filter((p) => p.isProp);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <SportBadge label={game.sportLabel} />
-            <h3 className="text-lg font-semibold text-white">
-              {game.awayTeam} @ {game.homeTeam}
-            </h3>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-            <span>{new Date(game.commenceTime).toLocaleString()}</span>
-            {game.marketEfficiency !== null && (
-              <span>Market efficiency: {game.marketEfficiency}/100</span>
-            )}
-          </div>
-          {game.homeAdvantageNote && (
-            <div className="mt-1 text-xs text-slate-500">{game.homeAdvantageNote}</div>
-          )}
+      {/* Header */}
+      <div className="mb-4">
+        <div className="flex items-center gap-2">
+          <SportBadge label={game.sportLabel} />
+          <h3 className="text-lg font-semibold text-white">
+            {game.awayTeam} @ {game.homeTeam}
+          </h3>
         </div>
-        <div className="flex gap-2">
-          {takes.length > 0 && (
-            <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-400">
-              {takes.length} {takes.length === 1 ? "play" : "plays"}
-            </span>
-          )}
-          {leans.length > 0 && (
-            <span className="rounded-full bg-amber-500/20 px-3 py-1 text-xs font-bold text-amber-400">
-              {leans.length} {leans.length === 1 ? "lean" : "leans"}
-            </span>
-          )}
+        <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
+          <span>{new Date(game.commenceTime).toLocaleString()}</span>
+          <span>{game.booksTotal} books</span>
+          <span>Agreement: {game.marketAgreement}/100</span>
         </div>
       </div>
 
-      {game.crossMarketNote && (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-xs text-blue-400">
-          <Scale className="h-3.5 w-3.5 flex-shrink-0" />
-          {game.crossMarketNote}
+      {/* Win probability hero */}
+      {game.homeWinProb !== null && game.awayWinProb !== null && (
+        <div className="mb-4 rounded-xl bg-white/5 p-4">
+          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Win probability
+          </div>
+          <div className="flex gap-4">
+            <ProbBar value={game.awayWinProb} label={game.awayTeam} />
+            <ProbBar value={game.homeWinProb} label={game.homeTeam} />
+          </div>
+          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
+            {game.spreadHome !== null && (
+              <span>Spread: {game.homeTeam} {game.spreadHome > 0 ? "+" : ""}{game.spreadHome}</span>
+            )}
+            {game.projectedTotal !== null && (
+              <span>O/U: {game.projectedTotal}</span>
+            )}
+          </div>
+          {game.gameFactor && (
+            <div className="mt-2 text-xs text-slate-500">{game.gameFactor}</div>
+          )}
         </div>
       )}
 
+      {/* Game line projections */}
       <div className="space-y-2">
-        {activePicks.map((p) => (
-          <PickCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} pick={p} />
+        {gameLines.map((p) => (
+          <ProjectionCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} proj={p} />
         ))}
       </div>
 
-      {passes.length > 0 && (
+      {/* Player props */}
+      {propLines.length > 0 && (
         <div className="mt-3">
           <button
-            onClick={() => setShowPasses(!showPasses)}
-            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-400"
+            onClick={() => setShowProps(!showProps)}
+            className="flex items-center gap-1.5 text-xs font-medium text-purple-400 hover:text-purple-300"
           >
-            {showPasses ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {passes.length} market{passes.length === 1 ? "" : "s"} we&apos;d pass on
+            {showProps ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {propLines.length} player prop{propLines.length === 1 ? "" : "s"}
           </button>
-          {showPasses && (
+          {showProps && (
             <div className="mt-2 space-y-2">
-              {passes.map((p) => (
-                <PickCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} pick={p} />
+              {propLines.map((p) => (
+                <ProjectionCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} proj={p} />
               ))}
             </div>
           )}
@@ -340,13 +266,10 @@ function GameSection({ game }: { game: GamePicks }) {
 
 export default function LiveOddsPage() {
   const [sport, setSport] = useState("all");
-  const [kalshiTicker, setKalshiTicker] = useState("");
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [filter, setFilter] = useState<"all" | "takes" | "leans">("all");
-  const [marketFilter, setMarketFilter] = useState<"all" | "game" | "props">("all");
   const [sportFilter, setSportFilter] = useState<string>("all");
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const [nextRefresh, setNextRefresh] = useState<Date | null>(null);
@@ -358,7 +281,6 @@ export default function LiveOddsPage() {
     try {
       const params = new URLSearchParams();
       if (sport !== "all") params.set("sport", sport);
-      if (kalshiTicker.trim()) params.set("kalshiSeriesTicker", kalshiTicker.trim());
       const res = await fetch(`/api/odds/live?${params.toString()}`);
       const json = await res.json();
       if (!json.ok) {
@@ -372,7 +294,7 @@ export default function LiveOddsPage() {
     } finally {
       setLoading(false);
     }
-  }, [sport, kalshiTicker, autoRefresh]);
+  }, [sport, autoRefresh]);
 
   useEffect(() => {
     if (autoRefresh) {
@@ -398,42 +320,29 @@ export default function LiveOddsPage() {
     return () => clearInterval(id);
   }, [nextRefresh]);
 
-  const games: GamePicks[] = data ? generatePicks(data.sportsbookLines) : [];
-  const summary = picksSummary(games);
+  const games = data ? buildProjections(data.sportsbookLines) : [];
+  const summary = projectionsSummary(games);
 
-  // Apply all filters
-  let filteredGames = games.map((g) => {
-    let picks = g.picks;
-    if (marketFilter === "game") picks = picks.filter((p) => !p.isProp);
-    if (marketFilter === "props") picks = picks.filter((p) => p.isProp);
-    return { ...g, picks };
-  });
+  let filteredGames = games;
   if (sportFilter !== "all") {
     filteredGames = filteredGames.filter((g) => g.sportLabel === sportFilter);
   }
-  if (filter === "takes") {
-    filteredGames = filteredGames.filter((g) => g.picks.some((p) => p.recommendation === "take"));
-  } else if (filter === "leans") {
-    filteredGames = filteredGames.filter((g) => g.picks.some((p) => p.recommendation === "take" || p.recommendation === "lean"));
-  }
-  // Remove games with no picks after market filter
-  filteredGames = filteredGames.filter((g) => g.picks.length > 0);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="mx-auto max-w-5xl px-4 py-8">
         {/* Header */}
         <div className="mb-8 text-center">
-          <h1 className="text-4xl font-bold tracking-tight">Today&apos;s Plays</h1>
+          <h1 className="text-4xl font-bold tracking-tight">Game Projections</h1>
           <p className="mt-2 text-slate-400">
-            Every sport. Every line on DraftKings &amp; FanDuel. We find the mispriced ones.
+            Weighted probabilities from {summary.totalGames > 0 ? `${games[0]?.booksTotal ?? 0}+` : "19"} sportsbooks, stripped of vig, averaged into one number.
           </p>
         </div>
 
         {/* Controls */}
         <section className="mb-6 flex flex-wrap items-end justify-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur">
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-400">Scope</label>
+            <label className="mb-1 block text-xs font-medium text-slate-400">Sport</label>
             <select
               value={sport}
               onChange={(e) => setSport(e.target.value)}
@@ -445,24 +354,13 @@ export default function LiveOddsPage() {
             </select>
           </div>
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-400">Kalshi Ticker</label>
-            <input
-              type="text"
-              value={kalshiTicker}
-              onChange={(e) => setKalshiTicker(e.target.value)}
-              placeholder="optional"
-              className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
           <button
             onClick={fetchOdds}
             disabled={loading}
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            {loading ? "Scanning..." : "Scan All Lines"}
+            {loading ? "Building projections..." : "Build Projections"}
           </button>
 
           <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -487,97 +385,52 @@ export default function LiveOddsPage() {
 
         {/* Summary */}
         {data && (
-          <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
               <div className="text-2xl font-bold text-white">{summary.totalGames}</div>
               <div className="mt-0.5 text-xs text-slate-400">Games</div>
             </div>
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-4 text-center">
-              <div className="text-2xl font-bold text-emerald-400">{summary.takes.length}</div>
-              <div className="mt-0.5 text-xs text-slate-400">Plays</div>
-            </div>
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-4 text-center">
-              <div className="text-2xl font-bold text-amber-400">{summary.leans.length}</div>
-              <div className="mt-0.5 text-xs text-slate-400">Leans</div>
-            </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
-              <div className={`text-2xl font-bold tabular-nums ${summary.totalEV > 0 ? "text-emerald-400" : "text-slate-300"}`}>
-                {summary.totalEV > 0 ? "+" : ""}${summary.totalEV.toFixed(0)}
-              </div>
-              <div className="mt-0.5 text-xs text-slate-400">Total EV</div>
+              <div className="text-2xl font-bold text-white">{summary.gameLineCount}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Game Lines</div>
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
-              <div className="text-2xl font-bold text-white">{summary.avgConfidence}%</div>
-              <div className="mt-0.5 text-xs text-slate-400">Avg Conf</div>
+            <div className="rounded-xl border border-purple-500/20 bg-purple-500/[0.04] p-4 text-center">
+              <div className="text-2xl font-bold text-purple-400">{summary.propCount}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Player Props</div>
+            </div>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 text-center">
+              <div className="text-2xl font-bold text-emerald-400">{summary.highConfCount}</div>
+              <div className="mt-0.5 text-xs text-slate-400">High Confidence</div>
             </div>
           </section>
         )}
 
-        {/* Filters */}
-        {data && (
-          <div className="mb-4 flex flex-wrap items-center gap-4">
-            {/* Recommendation filter */}
-            <div className="flex gap-2">
-              {([
-                { key: "all", label: "All" },
-                { key: "takes", label: "Plays Only" },
-                { key: "leans", label: "Plays + Leans" },
-              ] as const).map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${filter === f.key ? "bg-blue-600 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Market type filter */}
-            <div className="flex gap-2">
-              {([
-                { key: "all", label: "All Markets" },
-                { key: "game", label: "Game Lines" },
-                { key: "props", label: "Player Props" },
-              ] as const).map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setMarketFilter(f.key)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${marketFilter === f.key ? "bg-purple-600 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Sport filter chips */}
-            {summary.sportsWithGames.length > 1 && (
-              <div className="flex gap-1.5">
-                <button
-                  onClick={() => setSportFilter("all")}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${sportFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
-                >
-                  All Sports
-                </button>
-                {summary.sportsWithGames.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setSportFilter(s)}
-                    className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${sportFilter === s ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
+        {/* Sport filter */}
+        {data && summary.sportsWithGames.length > 1 && (
+          <div className="mb-4 flex gap-1.5">
+            <button
+              onClick={() => setSportFilter("all")}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${sportFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
+            >
+              All
+            </button>
+            {summary.sportsWithGames.map((s) => (
+              <button
+                key={s}
+                onClick={() => setSportFilter(s)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${sportFilter === s ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
+              >
+                {s}
+              </button>
+            ))}
           </div>
         )}
 
         {data && (
           <p className="mb-4 text-xs text-slate-500">
-            Scanned at {new Date(data.fetchedAt).toLocaleTimeString()} &middot;{" "}
-            {summary.totalMarkets} markets across {summary.totalGames} games
-            {summary.sportsWithGames.length > 0 && ` &middot; ${summary.sportsWithGames.join(", ")}`}
+            Built at {new Date(data.fetchedAt).toLocaleTimeString()} &middot;{" "}
+            {summary.totalProjections} projections across {summary.totalGames} games
+            &middot; Avg book agreement: {summary.avgAgreement}/100
           </p>
         )}
 
@@ -587,67 +440,26 @@ export default function LiveOddsPage() {
             <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/50 p-12 text-center">
               <Target className="mx-auto h-10 w-10 text-slate-600" />
               <p className="mt-3 text-slate-400">
-                Hit <strong>Scan All Lines</strong> to find today&apos;s best plays across every sport.
+                Hit <strong>Build Projections</strong> to generate win probabilities for today&apos;s NBA and MLB games.
               </p>
             </div>
           )}
 
           {data && filteredGames.length === 0 && (
             <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/50 p-8 text-center">
-              <ThumbsDown className="mx-auto h-8 w-8 text-slate-600" />
-              <p className="mt-2 text-sm text-slate-400">No games match this filter. Try &ldquo;All&rdquo;.</p>
+              <p className="text-sm text-slate-400">No games found for this filter.</p>
             </div>
           )}
 
           {filteredGames.map((game) => (
-            <GameSection key={game.gameId} game={game} />
+            <GameCard key={game.gameId} game={game} />
           ))}
         </section>
 
-        {/* Kalshi */}
-        {data && (data.kalshiLines ?? []).length > 0 && (
-          <section className="mt-8">
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-4 backdrop-blur">
-              <h2 className="mb-4 text-xl font-semibold">Kalshi Markets</h2>
-              <div className="space-y-3">
-                {data.kalshiLines.map((market) => (
-                  <div key={market.marketTicker} className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="font-medium text-white">{market.title}</div>
-                    {market.subtitle && <div className="mt-1 text-xs text-slate-400">{market.subtitle}</div>}
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                      <div className="rounded-xl bg-white/5 p-3">
-                        <div className="text-slate-400">Yes ask</div>
-                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.yesAsk)}</div>
-                      </div>
-                      <div className="rounded-xl bg-white/5 p-3">
-                        <div className="text-slate-400">No ask</div>
-                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.noAsk)}</div>
-                      </div>
-                      <div className="rounded-xl bg-white/5 p-3">
-                        <div className="text-slate-400">Yes bid</div>
-                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.yesBid)}</div>
-                      </div>
-                      <div className="rounded-xl bg-white/5 p-3">
-                        <div className="text-slate-400">No bid</div>
-                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.noBid)}</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
-                      <span>{market.marketTicker}</span>
-                      <span>Volume: {market.volume ?? "\u2014"}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
-
         {data && (
           <p className="mt-8 text-center text-[11px] text-slate-600">
-            Analysis uses cross-book no-vig consensus, expected value, Kelly Criterion,
-            home/away advantage factors, and cross-market consistency checks.
-            This is not financial advice. Gamble responsibly.
+            Projections are weighted averages of no-vig implied probabilities across all available sportsbooks.
+            More books = higher confidence. This is not financial advice.
           </p>
         )}
       </div>
