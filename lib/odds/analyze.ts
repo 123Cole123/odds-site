@@ -52,6 +52,9 @@ export type GameProjection = {
   booksTotal: number;
   projections: Projection[];
   modelNotes: string[];
+  edges: BookEdge[];
+  bestHomeBook: { book: string; price: number } | null;
+  bestAwayBook: { book: string; price: number } | null;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -146,6 +149,67 @@ const MODEL_WEIGHTS = {
   pythagorean: 0.25,
   spreadImplied: 0.25,
 };
+
+// ── Edge Computation ──────────────────────────────────────────────────────
+// Compare model probability to each individual book's implied probability.
+// A positive edge means the model thinks the true probability is higher
+// than the book's price implies — i.e., the book is offering value.
+
+export type BookEdge = {
+  book: string;
+  bookKey: string;
+  side: string;
+  impliedProb: number;
+  modelProb: number;
+  edge: number; // modelProb - impliedProb (positive = value)
+  price: number; // American odds
+};
+
+function computeBookEdges(
+  lines: SportsbookLine[],
+  gameId: string,
+  homeTeam: string,
+  awayTeam: string,
+  homeWinProb: number,
+  awayWinProb: number
+): BookEdge[] {
+  const h2hLines = lines.filter(
+    (l) => l.gameId === gameId && l.marketKey === "h2h"
+  );
+  const bookKeys = [...new Set(h2hLines.map((l) => l.bookmakerKey))];
+  const edges: BookEdge[] = [];
+
+  for (const bk of bookKeys) {
+    const bkLines = h2hLines.filter((l) => l.bookmakerKey === bk);
+    if (bkLines.length < 2) continue;
+
+    const totalImplied = bkLines.reduce(
+      (sum, l) => sum + americanToImpliedProbability(l.price),
+      0
+    );
+
+    for (const line of bkLines) {
+      const noVigProb = americanToImpliedProbability(line.price) / totalImplied;
+      const isHome = line.outcomeName === homeTeam;
+      const modelProb = isHome ? homeWinProb : awayWinProb;
+      const edge = modelProb - noVigProb;
+
+      edges.push({
+        book: line.book,
+        bookKey: line.bookmakerKey,
+        side: line.outcomeName,
+        impliedProb: noVigProb,
+        modelProb,
+        edge,
+        price: line.price,
+      });
+    }
+  }
+
+  // Sort by edge descending (biggest value first)
+  edges.sort((a, b) => b.edge - a.edge);
+  return edges;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -564,6 +628,23 @@ export function buildProjections(lines: SportsbookLine[]): GameProjection[] {
       return b.probability - a.probability;
     });
 
+    // ── Compute edges per book ──
+    const edges =
+      homeWinProb !== null && awayWinProb !== null
+        ? computeBookEdges(lines, gameId, first.homeTeam, first.awayTeam, homeWinProb, awayWinProb)
+        : [];
+
+    // ── Best odds per side ──
+    const h2hLines = lines.filter((l) => l.gameId === gameId && l.marketKey === "h2h");
+    const homeML = h2hLines.filter((l) => l.outcomeName === first.homeTeam);
+    const awayML = h2hLines.filter((l) => l.outcomeName === first.awayTeam);
+    const bestHome = homeML.length > 0
+      ? homeML.reduce((best, l) => (l.price > best.price ? l : best))
+      : null;
+    const bestAway = awayML.length > 0
+      ? awayML.reduce((best, l) => (l.price > best.price ? l : best))
+      : null;
+
     allGames.push({
       gameId,
       homeTeam: first.homeTeam,
@@ -584,6 +665,9 @@ export function buildProjections(lines: SportsbookLine[]): GameProjection[] {
       booksTotal: agreement.booksTotal,
       projections,
       modelNotes,
+      edges,
+      bestHomeBook: bestHome ? { book: bestHome.book, price: bestHome.price } : null,
+      bestAwayBook: bestAway ? { book: bestAway.book, price: bestAway.price } : null,
     });
   }
 
