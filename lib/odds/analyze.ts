@@ -365,13 +365,13 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
           if (efficiency < 60) {
             insights.push({
               label: "Inefficient market",
-              detail: `Market efficiency score: ${efficiency}/100 — wider vig means more potential for mispriced lines.`,
+              detail: `Efficiency ${efficiency}/100 — measured by the total overround (sum of implied probabilities minus 100%). Wider overround = books disagree more = better chance of finding value.`,
               type: "bullish",
             });
           } else if (efficiency > 85) {
             insights.push({
               label: "Tight market",
-              detail: `Market efficiency score: ${efficiency}/100 — sharp market with thin vig. Hard to find edges here.`,
+              detail: `Efficiency ${efficiency}/100 — measured by total overround. Low overround means sharp, well-priced market with thin margins. Harder to find edges.`,
               type: "bearish",
             });
           }
@@ -442,7 +442,7 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
 
         if (fairProb !== null) {
           reasoning.push(
-            `Market consensus gives ${side} a ${(fairProb * 100).toFixed(1)}% true win probability`
+            `No-vig consensus (stripping the juice from both sides of the line) gives ${side} a ${(fairProb * 100).toFixed(1)}% true win probability`
           );
           reasoning.push(
             `${best.book} prices it at ${(impliedProb * 100).toFixed(1)}% implied — ${
@@ -454,16 +454,16 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
         }
 
         if (ev > 0) {
-          reasoning.push(`+$${ev.toFixed(2)} expected value per $100 wagered`);
+          reasoning.push(`+$${ev.toFixed(2)} EV per $100 — calculated from (fair probability × payout) minus (loss probability × stake)`);
         } else if (ev < -2) {
           reasoning.push(
-            `Negative EV: -$${Math.abs(ev).toFixed(2)} per $100 — the juice is eating your edge`
+            `-$${Math.abs(ev).toFixed(2)} EV per $100 — fair probability doesn't justify the price at any book`
           );
         }
 
         if (other && priceDiff !== 0) {
           reasoning.push(
-            `${Math.abs(priceDiff)} cents better than ${other.book} (${formatOdds(other.price)}) — this is the sharper number`
+            `${Math.abs(priceDiff)} cent price advantage at ${best.book} — this is the sharper number available`
           );
         }
 
@@ -492,7 +492,7 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
 
         if (recommendation === "pass") {
           if (ev < 0) reasoning.push("No edge detected — line is priced efficiently or against you");
-          if (other && priceDiff === 0) reasoning.push("Both books agree on this number — no line shopping advantage");
+          if (other && priceDiff === 0) reasoning.push("Market consensus is tight — no line shopping advantage available");
         }
 
         picks.push({

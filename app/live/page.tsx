@@ -13,7 +13,6 @@ import {
   AlertCircle,
   DollarSign,
   Percent,
-  ArrowRight,
   ThumbsUp,
   ThumbsDown,
   Minus,
@@ -204,20 +203,23 @@ function PickCard({ pick }: { pick: Pick }) {
             </div>
           </div>
 
-          {/* Book comparison */}
-          {pick.otherBook && (
-            <div className="mb-4 flex items-center gap-2 rounded-lg bg-white/5 p-3">
-              <div className={`flex-1 rounded-md p-2 text-center ${pick.bestPrice >= (pick.otherPrice ?? 0) ? "bg-emerald-500/10 ring-1 ring-emerald-500/30" : "bg-white/5"}`}>
-                <div className="text-xs text-slate-400">{pick.bestBook}</div>
-                <div className="text-xl font-bold text-emerald-400">{formatAmericanOdds(pick.bestPrice)}</div>
+          {/* Recommended line */}
+          <div className="mb-4 rounded-lg bg-white/5 p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-400">Best available line</div>
+                <div className="mt-1 text-2xl font-bold text-emerald-400">{formatAmericanOdds(pick.bestPrice)}</div>
+                <div className="mt-0.5 text-xs text-slate-500">at {pick.bestBook}</div>
               </div>
-              <ArrowRight className="h-4 w-4 text-slate-600" />
-              <div className="flex-1 rounded-md bg-white/5 p-2 text-center">
-                <div className="text-xs text-slate-400">{pick.otherBook}</div>
-                <div className="text-xl font-bold text-slate-400">{pick.otherPrice !== null ? formatAmericanOdds(pick.otherPrice) : "\u2014"}</div>
+              <div className="text-right">
+                <div className="text-xs text-slate-400">Fair value derived from</div>
+                <div className="mt-1 text-xs leading-relaxed text-slate-500">
+                  No-vig consensus probability<br />
+                  (overround stripped from both sides)
+                </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* Insights */}
           {pick.insights.length > 0 && (
