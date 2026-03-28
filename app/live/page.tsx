@@ -17,6 +17,10 @@ import {
   ThumbsUp,
   ThumbsDown,
   Minus,
+  Home,
+  Plane,
+  Scale,
+  Info,
 } from "lucide-react";
 import { DISPLAY_SPORTS } from "@/lib/odds/sports";
 import {
@@ -25,7 +29,13 @@ import {
   formatAmericanOdds,
   centsToPercentDisplay,
 } from "@/lib/odds/normalize";
-import { generatePicks, picksSummary, GamePicks, Pick } from "@/lib/odds/analyze";
+import {
+  generatePicks,
+  picksSummary,
+  GamePicks,
+  Pick,
+  Insight,
+} from "@/lib/odds/analyze";
 
 type ApiResponse = {
   ok: boolean;
@@ -39,20 +49,31 @@ type ApiResponse = {
 
 const REFRESH_INTERVAL = 30 * 60 * 1000;
 
+const SPORT_COLORS: Record<string, string> = {
+  NBA: "bg-orange-500/20 text-orange-400 ring-orange-500/30",
+  MLB: "bg-red-500/20 text-red-400 ring-red-500/30",
+  NHL: "bg-cyan-500/20 text-cyan-400 ring-cyan-500/30",
+  NFL: "bg-green-500/20 text-green-400 ring-green-500/30",
+  NCAAB: "bg-purple-500/20 text-purple-400 ring-purple-500/30",
+  EPL: "bg-violet-500/20 text-violet-400 ring-violet-500/30",
+  UCL: "bg-blue-500/20 text-blue-400 ring-blue-500/30",
+};
+
+function SportBadge({ label }: { label: string }) {
+  const colors = SPORT_COLORS[label] ?? "bg-slate-500/20 text-slate-400 ring-slate-500/30";
+  return (
+    <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold ring-1 ${colors}`}>
+      {label}
+    </span>
+  );
+}
+
 function ConfidenceMeter({ value }: { value: number }) {
-  const color =
-    value >= 70
-      ? "bg-emerald-500"
-      : value >= 45
-      ? "bg-amber-500"
-      : "bg-slate-500";
+  const color = value >= 70 ? "bg-emerald-500" : value >= 45 ? "bg-amber-500" : "bg-slate-500";
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
-        <div
-          className={`h-full rounded-full ${color} transition-all`}
-          style={{ width: `${value}%` }}
-        />
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${value}%` }} />
       </div>
       <span className="text-xs tabular-nums text-slate-400">{value}%</span>
     </div>
@@ -79,6 +100,30 @@ function RecBadge({ rec }: { rec: "take" | "lean" | "pass" }) {
   );
 }
 
+function InsightBadge({ insight }: { insight: Insight }) {
+  const icon =
+    insight.label === "Home advantage" ? <Home className="h-3 w-3" /> :
+    insight.label === "Road team" ? <Plane className="h-3 w-3" /> :
+    insight.label === "Toss-up game" ? <Scale className="h-3 w-3" /> :
+    <Info className="h-3 w-3" />;
+
+  const colors =
+    insight.type === "bullish"
+      ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
+      : insight.type === "bearish"
+      ? "border-red-500/20 bg-red-500/5 text-red-400"
+      : "border-slate-500/20 bg-slate-500/5 text-slate-400";
+
+  return (
+    <div className={`rounded-lg border p-2.5 ${colors}`}>
+      <div className="flex items-center gap-1.5 text-xs font-semibold">
+        {icon} {insight.label}
+      </div>
+      <p className="mt-1 text-xs leading-relaxed opacity-80">{insight.detail}</p>
+    </div>
+  );
+}
+
 function PickCard({ pick }: { pick: Pick }) {
   const [expanded, setExpanded] = useState(pick.recommendation === "take");
 
@@ -92,17 +137,14 @@ function PickCard({ pick }: { pick: Pick }) {
           : "border-white/10 bg-white/[0.02]"
       }`}
     >
-      {/* Main row */}
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center justify-between p-4 text-left"
       >
         <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <RecBadge rec={pick.recommendation} />
-            <span className="text-base font-semibold text-white">
-              {pick.headline}
-            </span>
+            <span className="text-base font-semibold text-white">{pick.headline}</span>
           </div>
           <div className="mt-1.5">
             <ConfidenceMeter value={pick.confidence} />
@@ -120,51 +162,28 @@ function PickCard({ pick }: { pick: Pick }) {
               Bet at {pick.bestBook} <ExternalLink className="h-3 w-3" />
             </a>
           )}
-          {expanded ? (
-            <ChevronUp className="h-5 w-5 text-slate-500" />
-          ) : (
-            <ChevronDown className="h-5 w-5 text-slate-500" />
-          )}
+          {expanded ? <ChevronUp className="h-5 w-5 text-slate-500" /> : <ChevronDown className="h-5 w-5 text-slate-500" />}
         </div>
       </button>
 
-      {/* Expanded analytics */}
       {expanded && (
         <div className="border-t border-white/5 px-4 pb-4 pt-3">
-          {/* Key stats row */}
+          {/* Stats */}
           <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <div className="rounded-lg bg-white/5 p-3 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
                 <DollarSign className="h-3 w-3" /> EV / $100
               </div>
-              <div
-                className={`mt-1 text-lg font-bold tabular-nums ${
-                  pick.expectedValue > 0
-                    ? "text-emerald-400"
-                    : pick.expectedValue < -1
-                    ? "text-red-400"
-                    : "text-slate-300"
-                }`}
-              >
-                {pick.expectedValue > 0 ? "+" : ""}
-                ${pick.expectedValue.toFixed(2)}
+              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.expectedValue > 0 ? "text-emerald-400" : pick.expectedValue < -1 ? "text-red-400" : "text-slate-300"}`}>
+                {pick.expectedValue > 0 ? "+" : ""}${pick.expectedValue.toFixed(2)}
               </div>
             </div>
             <div className="rounded-lg bg-white/5 p-3 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
                 <Percent className="h-3 w-3" /> Edge
               </div>
-              <div
-                className={`mt-1 text-lg font-bold tabular-nums ${
-                  pick.edge > 1.5
-                    ? "text-emerald-400"
-                    : pick.edge > 0
-                    ? "text-amber-400"
-                    : "text-slate-300"
-                }`}
-              >
-                {pick.edge > 0 ? "+" : ""}
-                {pick.edge.toFixed(1)}%
+              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.edge > 1.5 ? "text-emerald-400" : pick.edge > 0 ? "text-amber-400" : "text-slate-300"}`}>
+                {pick.edge > 0 ? "+" : ""}{pick.edge.toFixed(1)}%
               </div>
             </div>
             <div className="rounded-lg bg-white/5 p-3 text-center">
@@ -172,25 +191,15 @@ function PickCard({ pick }: { pick: Pick }) {
                 <Target className="h-3 w-3" /> Fair Prob
               </div>
               <div className="mt-1 text-lg font-bold tabular-nums text-white">
-                {pick.fairProb !== null
-                  ? `${(pick.fairProb * 100).toFixed(1)}%`
-                  : "\u2014"}
+                {pick.fairProb !== null ? `${(pick.fairProb * 100).toFixed(1)}%` : "\u2014"}
               </div>
             </div>
             <div className="rounded-lg bg-white/5 p-3 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
                 <BarChart3 className="h-3 w-3" /> Kelly
               </div>
-              <div
-                className={`mt-1 text-lg font-bold tabular-nums ${
-                  pick.kellySuggestion > 0.02
-                    ? "text-emerald-400"
-                    : "text-slate-400"
-                }`}
-              >
-                {pick.kellySuggestion > 0
-                  ? `${(pick.kellySuggestion * 100).toFixed(1)}%`
-                  : "\u2014"}
+              <div className={`mt-1 text-lg font-bold tabular-nums ${pick.kellySuggestion > 0.02 ? "text-emerald-400" : "text-slate-400"}`}>
+                {pick.kellySuggestion > 0 ? `${(pick.kellySuggestion * 100).toFixed(1)}%` : "\u2014"}
               </div>
             </div>
           </div>
@@ -198,27 +207,24 @@ function PickCard({ pick }: { pick: Pick }) {
           {/* Book comparison */}
           {pick.otherBook && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-white/5 p-3">
-              <div
-                className={`flex-1 rounded-md p-2 text-center ${
-                  pick.bestPrice >= (pick.otherPrice ?? 0)
-                    ? "bg-emerald-500/10 ring-1 ring-emerald-500/30"
-                    : "bg-white/5"
-                }`}
-              >
+              <div className={`flex-1 rounded-md p-2 text-center ${pick.bestPrice >= (pick.otherPrice ?? 0) ? "bg-emerald-500/10 ring-1 ring-emerald-500/30" : "bg-white/5"}`}>
                 <div className="text-xs text-slate-400">{pick.bestBook}</div>
-                <div className="text-xl font-bold text-emerald-400">
-                  {formatAmericanOdds(pick.bestPrice)}
-                </div>
+                <div className="text-xl font-bold text-emerald-400">{formatAmericanOdds(pick.bestPrice)}</div>
               </div>
               <ArrowRight className="h-4 w-4 text-slate-600" />
               <div className="flex-1 rounded-md bg-white/5 p-2 text-center">
                 <div className="text-xs text-slate-400">{pick.otherBook}</div>
-                <div className="text-xl font-bold text-slate-400">
-                  {pick.otherPrice !== null
-                    ? formatAmericanOdds(pick.otherPrice)
-                    : "\u2014"}
-                </div>
+                <div className="text-xl font-bold text-slate-400">{pick.otherPrice !== null ? formatAmericanOdds(pick.otherPrice) : "\u2014"}</div>
               </div>
+            </div>
+          )}
+
+          {/* Insights */}
+          {pick.insights.length > 0 && (
+            <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {pick.insights.map((ins, i) => (
+                <InsightBadge key={i} insight={ins} />
+              ))}
             </div>
           )}
 
@@ -226,28 +232,12 @@ function PickCard({ pick }: { pick: Pick }) {
           <div className="rounded-lg bg-slate-900/60 p-3">
             <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-300">
               <Zap className="h-3.5 w-3.5" />
-              Why{" "}
-              {pick.recommendation === "take"
-                ? "we'd take this"
-                : pick.recommendation === "lean"
-                ? "we're leaning this way"
-                : "we're passing"}
+              Why {pick.recommendation === "take" ? "we'd take this" : pick.recommendation === "lean" ? "we're leaning this way" : "we're passing"}
             </div>
             <ul className="space-y-1.5">
               {pick.reasoning.map((reason, i) => (
-                <li
-                  key={i}
-                  className="flex items-start gap-2 text-sm text-slate-400"
-                >
-                  <span
-                    className={`mt-1.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full ${
-                      pick.recommendation === "take"
-                        ? "bg-emerald-500"
-                        : pick.recommendation === "lean"
-                        ? "bg-amber-500"
-                        : "bg-slate-500"
-                    }`}
-                  />
+                <li key={i} className="flex items-start gap-2 text-sm text-slate-400">
+                  <span className={`mt-1.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full ${pick.recommendation === "take" ? "bg-emerald-500" : pick.recommendation === "lean" ? "bg-amber-500" : "bg-slate-500"}`} />
                   {reason}
                 </li>
               ))}
@@ -269,15 +259,23 @@ function GameSection({ game }: { game: GamePicks }) {
 
   return (
     <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-      {/* Game header */}
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-white">
-            {game.awayTeam} @ {game.homeTeam}
-          </h3>
-          <span className="text-xs text-slate-400">
-            {new Date(game.commenceTime).toLocaleString()}
-          </span>
+          <div className="flex items-center gap-2">
+            <SportBadge label={game.sportLabel} />
+            <h3 className="text-lg font-semibold text-white">
+              {game.awayTeam} @ {game.homeTeam}
+            </h3>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+            <span>{new Date(game.commenceTime).toLocaleString()}</span>
+            {game.marketEfficiency !== null && (
+              <span>Market efficiency: {game.marketEfficiency}/100</span>
+            )}
+          </div>
+          {game.homeAdvantageNote && (
+            <div className="mt-1 text-xs text-slate-500">{game.homeAdvantageNote}</div>
+          )}
         </div>
         <div className="flex gap-2">
           {takes.length > 0 && (
@@ -293,38 +291,32 @@ function GameSection({ game }: { game: GamePicks }) {
         </div>
       </div>
 
-      {/* Active picks */}
+      {game.crossMarketNote && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-xs text-blue-400">
+          <Scale className="h-3.5 w-3.5 flex-shrink-0" />
+          {game.crossMarketNote}
+        </div>
+      )}
+
       <div className="space-y-2">
         {activePicks.map((p) => (
-          <PickCard
-            key={`${p.marketKey}__${p.side}__${p.point}`}
-            pick={p}
-          />
+          <PickCard key={`${p.marketKey}__${p.side}__${p.point}`} pick={p} />
         ))}
       </div>
 
-      {/* Passes (collapsed by default) */}
       {passes.length > 0 && (
         <div className="mt-3">
           <button
             onClick={() => setShowPasses(!showPasses)}
             className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-400"
           >
-            {showPasses ? (
-              <ChevronUp className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" />
-            )}
-            {passes.length} market{passes.length === 1 ? "" : "s"} we&apos;d
-            pass on
+            {showPasses ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {passes.length} market{passes.length === 1 ? "" : "s"} we&apos;d pass on
           </button>
           {showPasses && (
             <div className="mt-2 space-y-2">
               {passes.map((p) => (
-                <PickCard
-                  key={`${p.marketKey}__${p.side}__${p.point}`}
-                  pick={p}
-                />
+                <PickCard key={`${p.marketKey}__${p.side}__${p.point}`} pick={p} />
               ))}
             </div>
           )}
@@ -335,13 +327,14 @@ function GameSection({ game }: { game: GamePicks }) {
 }
 
 export default function LiveOddsPage() {
-  const [sport, setSport] = useState("nba");
+  const [sport, setSport] = useState("all");
   const [kalshiTicker, setKalshiTicker] = useState("");
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [filter, setFilter] = useState<"all" | "takes" | "leans">("all");
+  const [sportFilter, setSportFilter] = useState<string>("all");
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const [nextRefresh, setNextRefresh] = useState<Date | null>(null);
   const [countdown, setCountdown] = useState("");
@@ -350,19 +343,16 @@ export default function LiveOddsPage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ sport });
-      if (kalshiTicker.trim()) {
-        params.set("kalshiSeriesTicker", kalshiTicker.trim());
-      }
+      const params = new URLSearchParams();
+      if (sport !== "all") params.set("sport", sport);
+      if (kalshiTicker.trim()) params.set("kalshiSeriesTicker", kalshiTicker.trim());
       const res = await fetch(`/api/odds/live?${params.toString()}`);
       const json = await res.json();
       if (!json.ok) {
         setError(json.error ?? "Request failed");
       } else {
         setData(json);
-        if (autoRefresh) {
-          setNextRefresh(new Date(Date.now() + REFRESH_INTERVAL));
-        }
+        if (autoRefresh) setNextRefresh(new Date(Date.now() + REFRESH_INTERVAL));
       }
     } catch (err: any) {
       setError(err.message ?? "Network error");
@@ -378,22 +368,14 @@ export default function LiveOddsPage() {
     } else {
       setNextRefresh(null);
     }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [autoRefresh, fetchOdds]);
 
   useEffect(() => {
-    if (!nextRefresh) {
-      setCountdown("");
-      return;
-    }
+    if (!nextRefresh) { setCountdown(""); return; }
     const tick = () => {
       const diff = nextRefresh.getTime() - Date.now();
-      if (diff <= 0) {
-        setCountdown("Refreshing...");
-        return;
-      }
+      if (diff <= 0) { setCountdown("Refreshing..."); return; }
       const mins = Math.floor(diff / 60000);
       const secs = Math.floor((diff % 60000) / 1000);
       setCountdown(`${mins}m ${secs.toString().padStart(2, "0")}s`);
@@ -406,59 +388,50 @@ export default function LiveOddsPage() {
   const games: GamePicks[] = data ? generatePicks(data.sportsbookLines) : [];
   const summary = picksSummary(games);
 
-  const filteredGames =
-    filter === "all"
-      ? games
-      : filter === "takes"
-      ? games.filter((g) => g.picks.some((p) => p.recommendation === "take"))
-      : games.filter((g) =>
-          g.picks.some(
-            (p) => p.recommendation === "take" || p.recommendation === "lean"
-          )
-        );
+  // Apply both filters
+  let filteredGames = games;
+  if (sportFilter !== "all") {
+    filteredGames = filteredGames.filter((g) => g.sportLabel === sportFilter);
+  }
+  if (filter === "takes") {
+    filteredGames = filteredGames.filter((g) => g.picks.some((p) => p.recommendation === "take"));
+  } else if (filter === "leans") {
+    filteredGames = filteredGames.filter((g) => g.picks.some((p) => p.recommendation === "take" || p.recommendation === "lean"));
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="mx-auto max-w-5xl px-4 py-8">
         {/* Header */}
         <div className="mb-8 text-center">
-          <h1 className="text-4xl font-bold tracking-tight">
-            Today&apos;s Plays
-          </h1>
+          <h1 className="text-4xl font-bold tracking-tight">Today&apos;s Plays</h1>
           <p className="mt-2 text-slate-400">
-            We scan DraftKings &amp; FanDuel for mispriced lines. When the math
-            says take it, we tell you.
+            Every sport. Every line on DraftKings &amp; FanDuel. We find the mispriced ones.
           </p>
         </div>
 
         {/* Controls */}
         <section className="mb-6 flex flex-wrap items-end justify-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur">
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-400">
-              Sport
-            </label>
+            <label className="mb-1 block text-xs font-medium text-slate-400">Scope</label>
             <select
               value={sport}
               onChange={(e) => setSport(e.target.value)}
               className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-blue-500"
             >
               {DISPLAY_SPORTS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
+                <option key={s.value} value={s.value}>{s.label}</option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-400">
-              Kalshi Ticker (optional)
-            </label>
+            <label className="mb-1 block text-xs font-medium text-slate-400">Kalshi Ticker</label>
             <input
               type="text"
               value={kalshiTicker}
               onChange={(e) => setKalshiTicker(e.target.value)}
-              placeholder="e.g. KXNBA"
+              placeholder="optional"
               className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -468,10 +441,8 @@ export default function LiveOddsPage() {
             disabled={loading}
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
           >
-            <RefreshCw
-              className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
-            />
-            {loading ? "Scanning..." : "Scan Lines"}
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Scanning..." : "Scan All Lines"}
           </button>
 
           <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -484,12 +455,9 @@ export default function LiveOddsPage() {
             Auto (30 min)
           </label>
 
-          {countdown && (
-            <span className="text-xs text-slate-500">Next: {countdown}</span>
-          )}
+          {countdown && <span className="text-xs text-slate-500">Next: {countdown}</span>}
         </section>
 
-        {/* Error */}
         {error && (
           <div className="mb-6 flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
@@ -497,78 +465,82 @@ export default function LiveOddsPage() {
           </div>
         )}
 
-        {/* Summary dashboard */}
+        {/* Summary */}
         {data && (
-          <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
+              <div className="text-2xl font-bold text-white">{summary.totalGames}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Games</div>
+            </div>
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-4 text-center">
-              <div className="text-3xl font-bold text-emerald-400">
-                {summary.takes.length}
-              </div>
-              <div className="mt-0.5 text-xs font-medium text-slate-400">
-                Plays Today
-              </div>
+              <div className="text-2xl font-bold text-emerald-400">{summary.takes.length}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Plays</div>
             </div>
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-4 text-center">
-              <div className="text-3xl font-bold text-amber-400">
-                {summary.leans.length}
-              </div>
-              <div className="mt-0.5 text-xs font-medium text-slate-400">
-                Leans
-              </div>
+              <div className="text-2xl font-bold text-amber-400">{summary.leans.length}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Leans</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
-              <div
-                className={`text-3xl font-bold tabular-nums ${
-                  summary.totalEV > 0 ? "text-emerald-400" : "text-slate-300"
-                }`}
-              >
+              <div className={`text-2xl font-bold tabular-nums ${summary.totalEV > 0 ? "text-emerald-400" : "text-slate-300"}`}>
                 {summary.totalEV > 0 ? "+" : ""}${summary.totalEV.toFixed(0)}
               </div>
-              <div className="mt-0.5 text-xs font-medium text-slate-400">
-                Total EV (plays)
-              </div>
+              <div className="mt-0.5 text-xs text-slate-400">Total EV</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
-              <div className="text-3xl font-bold text-white">
-                {summary.avgConfidence}%
-              </div>
-              <div className="mt-0.5 text-xs font-medium text-slate-400">
-                Avg Confidence
-              </div>
+              <div className="text-2xl font-bold text-white">{summary.avgConfidence}%</div>
+              <div className="mt-0.5 text-xs text-slate-400">Avg Conf</div>
             </div>
           </section>
         )}
 
-        {/* Filter tabs */}
+        {/* Filters */}
         {data && (
-          <div className="mb-4 flex gap-2">
-            {(
-              [
-                { key: "all", label: "All Games" },
+          <div className="mb-4 flex flex-wrap items-center gap-4">
+            {/* Recommendation filter */}
+            <div className="flex gap-2">
+              {([
+                { key: "all", label: "All" },
                 { key: "takes", label: "Plays Only" },
                 { key: "leans", label: "Plays + Leans" },
-              ] as const
-            ).map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setFilter(f.key)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  filter === f.key
-                    ? "bg-blue-600 text-white"
-                    : "bg-white/5 text-slate-400 hover:bg-white/10"
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+              ] as const).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${filter === f.key ? "bg-blue-600 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Sport filter chips */}
+            {summary.sportsWithGames.length > 1 && (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setSportFilter("all")}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${sportFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
+                >
+                  All Sports
+                </button>
+                {summary.sportsWithGames.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSportFilter(s)}
+                    className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${sportFilter === s ? "bg-white/15 text-white" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Timestamp */}
         {data && (
           <p className="mb-4 text-xs text-slate-500">
             Scanned at {new Date(data.fetchedAt).toLocaleTimeString()} &middot;{" "}
             {summary.totalMarkets} markets across {summary.totalGames} games
+            {summary.sportsWithGames.length > 0 && ` &middot; ${summary.sportsWithGames.join(", ")}`}
           </p>
         )}
 
@@ -578,8 +550,7 @@ export default function LiveOddsPage() {
             <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/50 p-12 text-center">
               <Target className="mx-auto h-10 w-10 text-slate-600" />
               <p className="mt-3 text-slate-400">
-                Pick a sport and hit <strong>Scan Lines</strong> to find
-                today&apos;s best plays.
+                Hit <strong>Scan All Lines</strong> to find today&apos;s best plays across every sport.
               </p>
             </div>
           )}
@@ -587,10 +558,7 @@ export default function LiveOddsPage() {
           {data && filteredGames.length === 0 && (
             <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/50 p-8 text-center">
               <ThumbsDown className="mx-auto h-8 w-8 text-slate-600" />
-              <p className="mt-2 text-sm text-slate-400">
-                No plays match this filter right now. Try &ldquo;All
-                Games&rdquo;.
-              </p>
+              <p className="mt-2 text-sm text-slate-400">No games match this filter. Try &ldquo;All&rdquo;.</p>
             </div>
           )}
 
@@ -599,54 +567,32 @@ export default function LiveOddsPage() {
           ))}
         </section>
 
-        {/* Kalshi section */}
+        {/* Kalshi */}
         {data && (data.kalshiLines ?? []).length > 0 && (
           <section className="mt-8">
             <div className="rounded-3xl border border-white/10 bg-white/5 p-4 backdrop-blur">
-              <div className="mb-4">
-                <h2 className="text-xl font-semibold">Kalshi Markets</h2>
-                <p className="text-sm text-slate-400">
-                  Prediction market prices
-                </p>
-              </div>
+              <h2 className="mb-4 text-xl font-semibold">Kalshi Markets</h2>
               <div className="space-y-3">
                 {data.kalshiLines.map((market) => (
-                  <div
-                    key={market.marketTicker}
-                    className="rounded-2xl border border-white/10 bg-slate-900/70 p-4"
-                  >
-                    <div className="font-medium text-white">
-                      {market.title}
-                    </div>
-                    {market.subtitle && (
-                      <div className="mt-1 text-xs text-slate-400">
-                        {market.subtitle}
-                      </div>
-                    )}
+                  <div key={market.marketTicker} className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                    <div className="font-medium text-white">{market.title}</div>
+                    {market.subtitle && <div className="mt-1 text-xs text-slate-400">{market.subtitle}</div>}
                     <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                       <div className="rounded-xl bg-white/5 p-3">
                         <div className="text-slate-400">Yes ask</div>
-                        <div className="mt-1 font-semibold text-white">
-                          {centsToPercentDisplay(market.yesAsk)}
-                        </div>
+                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.yesAsk)}</div>
                       </div>
                       <div className="rounded-xl bg-white/5 p-3">
                         <div className="text-slate-400">No ask</div>
-                        <div className="mt-1 font-semibold text-white">
-                          {centsToPercentDisplay(market.noAsk)}
-                        </div>
+                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.noAsk)}</div>
                       </div>
                       <div className="rounded-xl bg-white/5 p-3">
                         <div className="text-slate-400">Yes bid</div>
-                        <div className="mt-1 font-semibold text-white">
-                          {centsToPercentDisplay(market.yesBid)}
-                        </div>
+                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.yesBid)}</div>
                       </div>
                       <div className="rounded-xl bg-white/5 p-3">
                         <div className="text-slate-400">No bid</div>
-                        <div className="mt-1 font-semibold text-white">
-                          {centsToPercentDisplay(market.noBid)}
-                        </div>
+                        <div className="mt-1 font-semibold text-white">{centsToPercentDisplay(market.noBid)}</div>
                       </div>
                     </div>
                     <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
@@ -660,12 +606,11 @@ export default function LiveOddsPage() {
           </section>
         )}
 
-        {/* Disclaimer */}
         {data && (
           <p className="mt-8 text-center text-[11px] text-slate-600">
-            Analysis is based on cross-book no-vig consensus probabilities,
-            expected value calculations, and Kelly Criterion sizing. This is not
-            financial advice. Gamble responsibly.
+            Analysis uses cross-book no-vig consensus, expected value, Kelly Criterion,
+            home/away advantage factors, and cross-market consistency checks.
+            This is not financial advice. Gamble responsibly.
           </p>
         )}
       </div>

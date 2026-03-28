@@ -26,12 +26,32 @@ async function fetchSportsbookOdds(sport: string): Promise<SportsbookLine[]> {
   const res = await fetch(url.toString(), { cache: "no-store" });
 
   if (!res.ok) {
+    // If a sport has no games (off-season), just return empty
+    if (res.status === 422 || res.status === 404) return [];
     const text = await res.text();
-    throw new Error(`Odds API error ${res.status}: ${text}`);
+    throw new Error(`Odds API error ${res.status} for ${sport}: ${text}`);
   }
 
   const json = await res.json();
   return normalizeSportsbookOdds(json);
+}
+
+async function fetchAllSports(): Promise<SportsbookLine[]> {
+  const sportKeys = Object.keys(SPORT_MAP);
+
+  const results = await Promise.allSettled(
+    sportKeys.map((sport) => fetchSportsbookOdds(sport))
+  );
+
+  const allLines: SportsbookLine[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      allLines.push(...result.value);
+    }
+    // silently skip failed sports (off-season, etc.)
+  }
+
+  return allLines;
 }
 
 async function fetchKalshiMarkets(
@@ -61,19 +81,19 @@ async function fetchKalshiMarkets(
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const sport = searchParams.get("sport") ?? "nba";
+    const sport = searchParams.get("sport"); // null = all sports
     const kalshiSeriesTicker =
       searchParams.get("kalshiSeriesTicker") ?? undefined;
 
     const [sportsbookLines, kalshiLines] = await Promise.all([
-      fetchSportsbookOdds(sport),
+      sport ? fetchSportsbookOdds(sport) : fetchAllSports(),
       fetchKalshiMarkets(kalshiSeriesTicker),
     ]);
 
     return NextResponse.json({
       ok: true,
       fetchedAt: new Date().toISOString(),
-      sport,
+      sport: sport ?? "all",
       kalshiSeriesTicker: kalshiSeriesTicker ?? null,
       sportsbookLines,
       kalshiLines,
