@@ -1,4 +1,4 @@
-import { SportsbookLine, americanToImpliedProbability } from "./normalize";
+import { SportsbookLine, americanToImpliedProbability, isPlayerProp, formatMarketLabel } from "./normalize";
 import { SPORT_LABEL } from "./sports";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -13,6 +13,8 @@ export type Pick = {
   marketKey: string;
   side: string;
   point: number | null;
+  playerName: string | null;
+  isProp: boolean;
   recommendation: "take" | "lean" | "pass";
   confidence: number;
   bestBook: string;
@@ -28,6 +30,7 @@ export type Pick = {
   edge: number;
   priceDiff: number;
   vig: number | null;
+  booksWithLine: number;
   headline: string;
   reasoning: string[];
   insights: Insight[];
@@ -252,22 +255,33 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
       const marketLines = gameLines.filter((l) => l.marketKey === marketKey);
       const fairProbs = computeNoVigBothSides(lines, gameId, marketKey);
 
+      // For player props, group by player+side+point; for game markets, by side+point
+      const isProp = isPlayerProp(marketKey);
       const sideKeys = [
-        ...new Set(marketLines.map((l) => `${l.outcomeName}||${l.point ?? "null"}`)),
+        ...new Set(marketLines.map((l) =>
+          `${l.outcomeName}||${l.point ?? "null"}||${l.playerName ?? ""}`
+        )),
       ];
 
       for (const sideKey of sideKeys) {
-        const [side, pointStr] = sideKey.split("||");
+        const parts = sideKey.split("||");
+        const side = parts[0];
+        const pointStr = parts[1];
+        const playerName = parts[2] || null;
         const point = pointStr === "null" ? null : parseFloat(pointStr);
 
         const sidelines = marketLines.filter(
-          (l) => l.outcomeName === side && ((l.point === null && point === null) || l.point === point)
+          (l) =>
+            l.outcomeName === side &&
+            ((l.point === null && point === null) || l.point === point) &&
+            (l.playerName ?? "") === (playerName ?? "")
         );
         if (sidelines.length === 0) continue;
 
         const sorted = [...sidelines].sort((a, b) => b.price - a.price);
         const best = sorted[0];
         const other = sorted.length > 1 ? sorted[1] : null;
+        const booksWithLine = new Set(sidelines.map((l) => l.bookmakerKey)).size;
 
         const impliedProb = americanToImpliedProbability(best.price);
         const fairProb = fairProbs.get(sideKey) ?? null;
@@ -377,6 +391,29 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
           }
         }
 
+        // Player prop insights
+        if (isProp && playerName) {
+          if (booksWithLine >= 4 && edge > 1) {
+            insights.push({
+              label: "Multi-book prop edge",
+              detail: `${booksWithLine} books are offering ${playerName} ${formatMarketLabel(marketKey)} and the best line stands out — more books pricing a prop = more reliable consensus.`,
+              type: "bullish",
+            });
+          } else if (booksWithLine >= 3) {
+            insights.push({
+              label: "Well-priced prop",
+              detail: `${booksWithLine} books have this ${playerName} prop — good market depth for a player prop.`,
+              type: "neutral",
+            });
+          } else if (booksWithLine <= 1) {
+            insights.push({
+              label: "Thin prop market",
+              detail: `Only ${booksWithLine} book offering this ${playerName} line — no cross-book consensus available, edge calculation less reliable.`,
+              type: "bearish",
+            });
+          }
+        }
+
         // Underdog value insight
         if (marketKey === "h2h" && fairProb !== null && fairProb > 0.28 && fairProb < 0.45 && edge > 1) {
           insights.push({
@@ -422,20 +459,25 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
         confidence = Math.round(Math.max(0, Math.min(100, confidence)));
 
         // ── Build headline ──
-        const marketLabel =
-          marketKey === "h2h"
-            ? "ML"
-            : marketKey === "spreads"
-            ? `${point != null && point > 0 ? "+" : ""}${point}`
-            : marketKey === "totals"
-            ? `${side} ${point}`
-            : marketKey;
+        let marketLabel: string;
+        if (isProp && playerName) {
+          marketLabel = `${playerName} ${side} ${point ?? ""} ${formatMarketLabel(marketKey)}`;
+        } else if (marketKey === "h2h") {
+          marketLabel = `${side} ML`;
+        } else if (marketKey === "spreads") {
+          marketLabel = `${side} ${point != null && point > 0 ? "+" : ""}${point}`;
+        } else if (marketKey === "totals") {
+          marketLabel = `${side} ${point}`;
+        } else {
+          marketLabel = `${side} ${formatMarketLabel(marketKey)}`;
+        }
+
         const headline =
           recommendation === "take"
-            ? `Take ${side} ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
+            ? `Take ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
             : recommendation === "lean"
-            ? `Lean ${side} ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
-            : `Pass on ${side} ${marketLabel}`;
+            ? `Lean ${marketLabel} at ${best.book} ${formatOdds(best.price)}`
+            : `Pass on ${marketLabel}`;
 
         // ── Build reasoning ──
         const reasoning: string[] = [];
@@ -505,6 +547,8 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
           marketKey,
           side,
           point,
+          playerName,
+          isProp,
           recommendation,
           confidence,
           bestBook: best.book,
@@ -520,6 +564,7 @@ export function generatePicks(lines: SportsbookLine[]): GamePicks[] {
           edge: Math.round(edge * 100) / 100,
           priceDiff,
           vig,
+          booksWithLine,
           headline,
           reasoning,
           insights,
@@ -576,12 +621,16 @@ export function picksSummary(games: GamePicks[]) {
       ? takes.reduce((sum, p) => sum + p.confidence, 0) / takes.length
       : 0;
   const sportsWithGames = [...new Set(games.map((g) => g.sportLabel))];
+  const propPicks = allPicks.filter((p) => p.isProp);
+  const gamePicks = allPicks.filter((p) => !p.isProp);
 
   return {
     takes,
     leans,
     totalGames: games.length,
     totalMarkets: allPicks.length,
+    totalProps: propPicks.length,
+    totalGameLines: gamePicks.length,
     totalEV: Math.round(totalEV * 100) / 100,
     avgConfidence: Math.round(avgConfidence),
     sportsWithGames,

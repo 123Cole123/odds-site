@@ -143,10 +143,20 @@ function PickCard({ pick }: { pick: Pick }) {
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <RecBadge rec={pick.recommendation} />
+            {pick.isProp && (
+              <span className="rounded-md bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-400 ring-1 ring-purple-500/30">
+                PROP
+              </span>
+            )}
             <span className="text-base font-semibold text-white">{pick.headline}</span>
           </div>
-          <div className="mt-1.5">
+          <div className="mt-1.5 flex items-center gap-3">
             <ConfidenceMeter value={pick.confidence} />
+            {pick.booksWithLine > 1 && (
+              <span className="text-[10px] text-slate-500">
+                {pick.booksWithLine} books
+              </span>
+            )}
           </div>
         </div>
         <div className="ml-4 flex items-center gap-3">
@@ -302,7 +312,7 @@ function GameSection({ game }: { game: GamePicks }) {
 
       <div className="space-y-2">
         {activePicks.map((p) => (
-          <PickCard key={`${p.marketKey}__${p.side}__${p.point}`} pick={p} />
+          <PickCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} pick={p} />
         ))}
       </div>
 
@@ -318,7 +328,7 @@ function GameSection({ game }: { game: GamePicks }) {
           {showPasses && (
             <div className="mt-2 space-y-2">
               {passes.map((p) => (
-                <PickCard key={`${p.marketKey}__${p.side}__${p.point}`} pick={p} />
+                <PickCard key={`${p.marketKey}__${p.side}__${p.point}__${p.playerName ?? ""}`} pick={p} />
               ))}
             </div>
           )}
@@ -336,6 +346,7 @@ export default function LiveOddsPage() {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [filter, setFilter] = useState<"all" | "takes" | "leans">("all");
+  const [marketFilter, setMarketFilter] = useState<"all" | "game" | "props">("all");
   const [sportFilter, setSportFilter] = useState<string>("all");
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const [nextRefresh, setNextRefresh] = useState<Date | null>(null);
@@ -390,8 +401,13 @@ export default function LiveOddsPage() {
   const games: GamePicks[] = data ? generatePicks(data.sportsbookLines) : [];
   const summary = picksSummary(games);
 
-  // Apply both filters
-  let filteredGames = games;
+  // Apply all filters
+  let filteredGames = games.map((g) => {
+    let picks = g.picks;
+    if (marketFilter === "game") picks = picks.filter((p) => !p.isProp);
+    if (marketFilter === "props") picks = picks.filter((p) => p.isProp);
+    return { ...g, picks };
+  });
   if (sportFilter !== "all") {
     filteredGames = filteredGames.filter((g) => g.sportLabel === sportFilter);
   }
@@ -400,6 +416,8 @@ export default function LiveOddsPage() {
   } else if (filter === "leans") {
     filteredGames = filteredGames.filter((g) => g.picks.some((p) => p.recommendation === "take" || p.recommendation === "lean"));
   }
+  // Remove games with no picks after market filter
+  filteredGames = filteredGames.filter((g) => g.picks.length > 0);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
@@ -509,6 +527,23 @@ export default function LiveOddsPage() {
                   key={f.key}
                   onClick={() => setFilter(f.key)}
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${filter === f.key ? "bg-blue-600 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Market type filter */}
+            <div className="flex gap-2">
+              {([
+                { key: "all", label: "All Markets" },
+                { key: "game", label: "Game Lines" },
+                { key: "props", label: "Player Props" },
+              ] as const).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setMarketFilter(f.key)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${marketFilter === f.key ? "bg-purple-600 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}
                 >
                   {f.label}
                 </button>
