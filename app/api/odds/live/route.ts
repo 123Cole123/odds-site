@@ -7,6 +7,21 @@ import {
   KalshiLine,
 } from "@/lib/odds/normalize";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SERVER-SIDE CACHE — avoid burning API requests on every page load
+// Cache lasts 10 minutes. Every visitor in that window gets the cached data.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+type CacheEntry = {
+  data: { sportsbookLines: SportsbookLine[]; kalshiLines: KalshiLine[]; fetchedAt?: string };
+  fetchedAt: string;
+  expiresAt: number;
+};
+
+const cache: Record<string, CacheEntry> = {};
+
 // All US-region bookmakers supported by The Odds API
 const ALL_BOOKMAKERS = [
   "draftkings",
@@ -30,7 +45,7 @@ const ALL_BOOKMAKERS = [
   "fliff",
 ].join(",");
 
-// Standard game markets
+// Standard game markets (h2h + spreads + totals = 1 API request per sport)
 const GAME_MARKETS = "h2h,spreads,totals";
 
 // Player prop markets by sport
@@ -71,20 +86,29 @@ async function fetchGameOdds(sport: string): Promise<SportsbookLine[]> {
     throw new Error(`Odds API error ${res.status} for ${sport}: ${text}`);
   }
 
+  // Log remaining quota
+  const remaining = res.headers.get("x-requests-remaining");
+  const used = res.headers.get("x-requests-used");
+  console.log(`[Odds API] ${sport} game odds — used: ${used}, remaining: ${remaining}`);
+
   return normalizeSportsbookOdds(await res.json());
 }
 
 async function fetchPlayerProps(sport: string): Promise<SportsbookLine[]> {
+  // Props are DISABLED by default to conserve quota.
+  // Each event = 1 API request, so 5 events × 2 sports = 10+ requests per refresh.
+  // Enable by setting ENABLE_PROPS=true in .env.local
+  if (process.env.ENABLE_PROPS !== "true") return [];
+
   const sportKey = SPORT_MAP[sport];
   if (!sportKey) return [];
 
   const propMarkets = PROP_MARKETS[sportKey];
-  if (!propMarkets) return []; // no props defined for this sport
+  if (!propMarkets) return [];
 
   const apiKey = process.env.ODDS_API_KEY;
   if (!apiKey) throw new Error("Missing ODDS_API_KEY env var");
 
-  // First get events list to get event IDs
   const eventsUrl = new URL(
     `https://api.the-odds-api.com/v4/sports/${sportKey}/events`
   );
@@ -96,8 +120,8 @@ async function fetchPlayerProps(sport: string): Promise<SportsbookLine[]> {
   const events: any[] = await eventsRes.json();
   if (events.length === 0) return [];
 
-  // Fetch props for each event (limit to first 5 to conserve API quota)
-  const eventSlice = events.slice(0, 5);
+  // Limit to first 3 events to conserve quota
+  const eventSlice = events.slice(0, 3);
 
   const results = await Promise.allSettled(
     eventSlice.map(async (event) => {
@@ -114,7 +138,6 @@ async function fetchPlayerProps(sport: string): Promise<SportsbookLine[]> {
       if (!res.ok) return [];
 
       const data = await res.json();
-      // The event-level endpoint returns a single event object, not an array
       return normalizeSportsbookOdds([data]);
     })
   );
@@ -181,19 +204,50 @@ export async function GET(req: NextRequest) {
     const sport = searchParams.get("sport"); // null = all sports
     const kalshiSeriesTicker =
       searchParams.get("kalshiSeriesTicker") ?? undefined;
+    const forceRefresh = searchParams.get("force") === "true";
+
+    const cacheKey = `${sport ?? "all"}__${kalshiSeriesTicker ?? ""}`;
+
+    // Check cache first
+    const cached = cache[cacheKey];
+    if (cached && !forceRefresh && Date.now() < cached.expiresAt) {
+      console.log(`[Cache HIT] ${cacheKey} — expires in ${Math.round((cached.expiresAt - Date.now()) / 1000)}s`);
+      return NextResponse.json({
+        ok: true,
+        fetchedAt: cached.data.fetchedAt ?? cached.fetchedAt,
+        sport: sport ?? "all",
+        kalshiSeriesTicker: kalshiSeriesTicker ?? null,
+        sportsbookLines: cached.data.sportsbookLines,
+        kalshiLines: cached.data.kalshiLines,
+        cached: true,
+        cacheExpiresIn: Math.round((cached.expiresAt - Date.now()) / 1000),
+      });
+    }
+
+    console.log(`[Cache MISS] ${cacheKey} — fetching fresh data`);
 
     const [sportsbookLines, kalshiLines] = await Promise.all([
       sport ? fetchSportFull(sport) : fetchAllSports(),
       fetchKalshiMarkets(kalshiSeriesTicker),
     ]);
 
+    const fetchedAt = new Date().toISOString();
+
+    // Store in cache
+    cache[cacheKey] = {
+      data: { sportsbookLines, kalshiLines, fetchedAt } as any,
+      fetchedAt,
+      expiresAt: Date.now() + CACHE_TTL,
+    };
+
     return NextResponse.json({
       ok: true,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt,
       sport: sport ?? "all",
       kalshiSeriesTicker: kalshiSeriesTicker ?? null,
       sportsbookLines,
       kalshiLines,
+      cached: false,
     });
   } catch (error: any) {
     return NextResponse.json(
